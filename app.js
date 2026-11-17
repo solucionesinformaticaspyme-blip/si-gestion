@@ -236,7 +236,7 @@ VISTAS.cliente = async function (id) {
   abonos.sort((a, b) => (a.vigencia_desde < b.vigencia_desde ? 1 : -1));
   $('#main').innerHTML =
     '<section class="card"><h2>Datos ' + boton('cliEditar', 'Editar', 'edit', ' data-id="' + id + '"', 'btn-sm') + '</h2><div class="datos">' +
-    [['Código', c.id], ['CUIT', c.cuit], ['Email', c.email], ['Teléfono', c.telefono], ['Día límite de cobro', c.dia_limite || (S.config.dia_limite_default || 10) + ' (general)'],
+    [['Código', c.id], ['CUIT', c.cuit], ['Condición IVA', c.cond_iva], ['Contacto', c.contacto], ['Email', c.email], ['Teléfono', c.telefono], ['Día límite de cobro', c.dia_limite || (S.config.dia_limite_default || 10) + ' (general)'],
       ['Estado', c.activo === 'NO' ? 'Inactivo' : 'Activo'], ['Notas', c.notas]].map(x => '<div><small>' + x[0] + '</small>' + (esc(x[1]) || '—') + '</div>').join('') + '</div></section>' +
     '<section class="card"><h2>Abono mensual ' + boton('aboNuevo', 'Nuevo abono o aumento', 'add', ' data-id="' + id + '"', 'btn-sm') + '</h2>' +
     tabla([{ t: 'Vigente desde' }, { t: 'Concepto', c: 'hm' }, { t: 'Importe', c: 'num' }, { t: 'Estado' }, { t: '' }],
@@ -349,6 +349,8 @@ function formCliente(c) {
   c = c || {};
   const campos = [
     { n: 'nombre', label: 'Nombre o razón social', req: true, valor: c.nombre }, { n: 'cuit', label: 'CUIT', valor: c.cuit },
+    { n: 'cond_iva', label: 'Condición frente al IVA', tipo: 'select', valor: c.cond_iva, opciones: [['', '—'], ['Monotributo', 'Monotributo'], ['Responsable Inscripto', 'Responsable Inscripto'], ['Exento', 'Exento'], ['Consumidor Final', 'Consumidor Final']] },
+    { n: 'contacto', label: 'Persona de contacto', valor: c.contacto },
     { n: 'email', label: 'Email', tipo: 'email', valor: c.email }, { n: 'telefono', label: 'Teléfono', valor: c.telefono },
     { n: 'dia_limite', label: 'Día límite de cobro', tipo: 'number', step: 1, min: 1, max: 31, valor: c.dia_limite, ayuda: 'Vacío: se usa el día general (' + (S.config.dia_limite_default || 10) + ').' },
     { n: 'notas', label: 'Notas', tipo: 'textarea', valor: c.notas }];
