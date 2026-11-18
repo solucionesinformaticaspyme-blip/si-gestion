@@ -36,6 +36,7 @@ body { font-family: var(--font-stack); background: var(--bg-page); color: var(--
 .neg { color: var(--danger-color); }
 .muted { color: var(--text-secondary); }
 .small { font-size: 13px; }
+.nw { white-space: nowrap; }
 
 /* ---------- Estructura ---------- */
 .app { display: grid; grid-template-columns: 236px 1fr; min-height: 100vh; }
@@ -90,6 +91,7 @@ tfoot td { font-weight: 700; border-top: 1px solid var(--border-color); }
 .chip.verde { background: var(--success-container); color: var(--success-color); }
 .chip.rojo { background: var(--danger-container); color: var(--danger-color); }
 .chip.ambar { background: var(--warn-container); color: var(--warn-color); }
+.chip.naranja { background: #FDEBDD; color: #9A4A12; }
 
 /* ---------- Botones ---------- */
 .btn { font: inherit; font-size: 14px; font-weight: 700; height: 42px; padding: 0 16px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); background: #fff; color: var(--text-primary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px; box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05); white-space: nowrap; }
@@ -141,6 +143,43 @@ input[type=checkbox] { width: 18px; height: 18px; }
 .setup-box .sub { color: var(--text-secondary); margin: 4px 0 22px; font-size: 14px; }
 .setup-box .form { text-align: left; }
 
+/* ---------- Pestañas ---------- */
+.seg { display: inline-flex; gap: 4px; padding: 4px; background: var(--border-light); border-radius: var(--radius-sm); flex-wrap: wrap; align-self: flex-start; max-width: 100%; }
+.seg button { font: inherit; font-size: 14px; font-weight: 700; border: none; background: none; color: var(--text-secondary); padding: 8px 14px; border-radius: 9px; cursor: pointer; }
+.seg button.on { background: #fff; color: var(--primary-color); box-shadow: var(--shadow-sm); }
+
+/* ---------- Cartel "¿ya fue pagado?" ---------- */
+.resumen { display: flex; justify-content: space-between; align-items: center; gap: 12px; background: var(--bg-input); border: 1px solid var(--border-light); border-radius: var(--radius-sm); padding: 12px 14px; margin-bottom: 16px; }
+.resumen div b { display: block; }
+.resumen div span { color: var(--text-secondary); font-size: 13px; }
+.resumen > b { font-size: 18px; }
+.eleccion { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 8px; }
+.opcion { font: inherit; text-align: left; display: flex; flex-direction: column; gap: 4px; padding: 16px; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: #fff; cursor: pointer; box-shadow: var(--shadow-sm); }
+.opcion .material-symbols-rounded { font-size: 28px; color: var(--primary-color); margin-bottom: 4px; }
+.opcion b { font-size: 15px; }
+.opcion span:last-child { font-size: 13px; color: var(--text-secondary); }
+.opcion:hover { border-color: var(--primary-color); background: var(--primary-container); }
+.opcion:disabled { opacity: 0.55; cursor: not-allowed; background: #fff; border-color: var(--border-color); }
+
+/* ---------- Menú "Más" ---------- */
+.menu-mas { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.menu-mas .nav-btn { padding: 14px 12px; background: var(--bg-input); }
+
+/* ---------- Gráfico ---------- */
+.grafico { min-height: 290px; }
+.leyenda { display: flex; gap: 18px; font-size: 13px; color: var(--text-secondary); font-weight: 600; margin-bottom: 6px; }
+.leyenda i, .tip i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.plot { position: relative; }
+.plot svg { display: block; overflow: visible; }
+.plot .eje { font-size: 11px; fill: var(--text-secondary); font-family: var(--font-stack); }
+.plot .hit { cursor: crosshair; }
+.plot .hit.on { fill: rgba(43, 108, 176, 0.06); }
+.tip { position: absolute; background: #fff; border: 1px solid var(--border-color); border-radius: 10px; box-shadow: var(--shadow-md); padding: 10px 12px; font-size: 13px; pointer-events: none; min-width: 190px; z-index: 5; }
+.tip b { display: block; margin-bottom: 4px; }
+.tip div { display: flex; align-items: center; gap: 4px; }
+.tip div span { margin-left: auto; padding-left: 12px; font-variant-numeric: tabular-nums; font-weight: 700; }
+.tip .res { border-top: 1px solid var(--border-light); margin-top: 4px; padding-top: 4px; }
+
 /* ---------- Celular ---------- */
 @media (max-width: 860px) {
   .app { display: block; }
@@ -153,10 +192,13 @@ input[type=checkbox] { width: 18px; height: 18px; }
   .kpi { padding: 12px; gap: 10px; }
   .kpi-icon { width: 38px; height: 38px; }
   .kpi b { font-size: 16px; }
-  .bottom { display: grid; grid-template-columns: repeat(6, 1fr); position: fixed; left: 0; right: 0; bottom: 0; background: #fff; border-top: 1px solid var(--border-color); padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); z-index: 40; }
+  .bottom { display: grid; grid-template-columns: repeat(5, 1fr); position: fixed; left: 0; right: 0; bottom: 0; background: #fff; border-top: 1px solid var(--border-color); padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); z-index: 40; }
   .bottom .nav-btn { flex-direction: column; gap: 2px; padding: 6px 0; font-size: 10px; align-items: center; text-align: center; border-radius: 10px; }
   .bottom .nav-btn span.t { overflow: hidden; text-overflow: ellipsis; max-width: 100%; white-space: nowrap; }
   .imputa { grid-template-columns: 1fr 100px; }
+  .eleccion { grid-template-columns: 1fr; }
+  .seg { display: flex; }
+  .seg button { flex: 1; padding: 8px 6px; font-size: 13px; }
   .imputa .pend { display: none; }
 }
 @media (max-width: 420px) { .kpi-grid { grid-template-columns: 1fr; } }
