@@ -437,7 +437,7 @@ VISTAS.tesoreria = async function () {
 // ---------- Informes
 
 const INFORMES = [['rentabilidad', 'Rentabilidad por mes'], ['ventas', 'Ventas por concepto'], ['gastos', 'Gastos por concepto'], ['saldos', 'Saldos']];
-const COLOR_ING = '#2B6CB0', COLOR_GAS = '#E07A2F';   // validados para daltonismo (ΔE ≥ 23) y contraste ≥ 3:1
+const COLOR_ING = '#14737C', COLOR_GAS = '#FF914D';   // colores Sipymes; validados para daltonismo (ΔE 20,9). El naranja tiene poco contraste: por eso hay tabla y detalle al pasar el mouse
 
 VISTAS.informes = async function () {
   const I = S.inf;
