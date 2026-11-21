@@ -170,6 +170,10 @@ input[type=checkbox] { width: 18px; height: 18px; }
 .opcion:hover { border-color: var(--accent); background: #FFF6F0; }
 .opcion:disabled { opacity: 0.55; cursor: not-allowed; background: #fff; border-color: var(--border-color); }
 
+/* ---------- Avisos y pasos ---------- */
+.card.aviso { border-left: 3px solid var(--accent); }
+.pasos { margin: 10px 0 14px 20px; font-size: 14px; display: flex; flex-direction: column; gap: 4px; }
+
 /* ---------- Menú "Más" ---------- */
 .menu-mas { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .menu-mas .nav-btn { padding: 14px 12px; background: var(--bg-input); }

@@ -1,4 +1,4 @@
-/* Si-Gestión – Pantallas (etapas 1 y 2).
+/* Si-Gestión – Pantallas (etapas 1, 2 y 3).
    Sin credenciales en el código: la dirección del servidor y la clave se ingresan
    en el primer uso y quedan guardadas solo en este dispositivo. */
 'use strict';
@@ -255,6 +255,12 @@ VISTAS.inicio = async function () {
         fecha(p.vencimiento) + (p.vencimiento < h ? ' <span class="chip rojo">Vencido</span>' : p.vencimiento === h ? ' <span class="chip ambar">Hoy</span>' : ''),
         plata(p.pendiente), boton('cancNueva', 'Pagar', '', ' data-c="COMPRA" data-id="' + p.entidad_id + '"', 'btn-sm')] })))
       : '<p class="vacio">Nada por pagar en los próximos días.</p>') + '</section></div>' +
+    (d.gastos_pendientes && d.gastos_pendientes.length ? '<section class="card aviso"><h2>Retiros sin resolver con tu app de gastos <span class="chip ambar">' + d.gastos_pendientes.length + '</span> ' +
+      boton('gastosReintentar', 'Reintentar', 'sync', '', 'btn-sm') + '</h2>' +
+      tabla([{ t: 'Fecha' }, { t: 'Retiro' }, { t: 'Importe', c: 'num' }, { t: 'Qué pasa', c: 'hm' }],
+        d.gastos_pendientes.map(g => ({ c: [fecha(g.fecha), esc(g.detalle) + (g.accion === 'borrar' ? ' <span class="chip rojo">Anulado</span>' : ''), plata(g.importe),
+          '<span class="muted small">' + esc(g.error || (g.accion === 'borrar' ? 'Falta borrarlo en tu app de gastos' : 'Falta enviarlo')) + '</span>'] }))) +
+      '<p class="muted small" style="margin-top:8px">Se reintenta solo todos los días a las 7.</p></section>' : '') +
     '<section class="card"><h2>Saldos de tesorería</h2>' +
     (d.cuentas.length ? d.cuentas.map(c => '<div class="fila"><span>' + esc(c.nombre) + ' <span class="chip">' + esc(c.tipo) + '</span></span><b class="num ' + (c.saldo < 0 ? 'neg' : '') + '">' + plata(c.saldo) + '</b></div>').join('')
       : '<p class="vacio">Todavía no hay cuentas. Crealas en Configuración.</p>') + '</section>';
@@ -421,7 +427,7 @@ VISTAS.tesoreria = async function () {
   const f = S.fTes;
   const r = await Promise.all([api('tesoreria.saldos'), api('tesoreria.movimientos', Object.assign({ cuenta_id: f.cuenta_id, con_anulados: f.anulados }, rango(f.mes)))]);
   const saldos = r[0].filter(c => c.activo !== 'NO' || c.saldo !== 0), movs = r[1];
-  $('#acciones').innerHTML = boton('trfNueva', 'Transferencia', 'swap_horiz') + boton('movNuevo', 'Movimiento', 'add', '', 'btn-primary');
+  $('#acciones').innerHTML = boton('retNuevo', 'Retiro', 'savings') + boton('trfNueva', 'Transferencia', 'swap_horiz') + boton('movNuevo', 'Movimiento', 'add', '', 'btn-primary');
   $('#main').innerHTML = (saldos.length ? '<div class="kpi-grid">' + saldos.map(c => kpi(c.tipo === 'CAJA' ? 'point_of_sale' : c.tipo === 'BANCO' ? 'account_balance' : 'account_balance_wallet', esc(c.nombre), plata(c.saldo), c.saldo < 0 ? 'bad' : '')).join('') +
     kpi('functions', 'Total', plata(saldos.reduce((a, c) => a + c.saldo, 0)), 'ok') + '</div>' : '<div class="card"><p class="vacio">Todavía no hay cuentas de tesorería. Crealas en Configuración.</p></div>') +
     '<section class="card"><h2>Movimientos</h2><div class="filtros" style="margin-bottom:12px">' +
@@ -429,7 +435,7 @@ VISTAS.tesoreria = async function () {
     '<div class="campo"><label for="ft-cta">Cuenta</label>' + selectHtml('ft-cta', S.cuentas.map(c => [c.id, c.nombre]), f.cuenta_id, 'tesFiltro', 'Todas') + '</div>' +
     '<label class="check"><input id="ft-anu" type="checkbox" data-chg="tesFiltro"' + (f.anulados ? ' checked' : '') + '> Ver anulados</label></div>' +
     tabla([{ t: 'Fecha' }, { t: 'N°', c: 'hm' }, { t: 'Cuenta' }, { t: 'Detalle', c: 'hm' }, { t: 'Ingreso', c: 'num' }, { t: 'Egreso', c: 'num' }, { t: '' }],
-      movs.map(m => ({ attr: m.estado === 'ANULADO' ? 'class="anulado"' : '', c: [fecha(m.fecha), esc(m.id), esc(m.cuenta), esc(m.detalle),
+      movs.map(m => ({ attr: m.estado === 'ANULADO' ? 'class="anulado"' : '', c: [fecha(m.fecha), esc(m.id), esc(m.cuenta), esc(m.detalle) + (m.origen === 'RETIRO' ? chipGastos(m) : ''),
         m.tipo === 'INGRESO' ? '<span class="pos">' + plata(m.importe) + '</span>' : '', m.tipo === 'EGRESO' ? '<span class="neg">' + plata(m.importe) + '</span>' : '',
         m.estado === 'ANULADO' ? '<span class="chip">Anulado</span>' : (m.origen === 'RECIBO' || m.origen === 'PAGO' ? '<span class="chip" title="Se anula desde el ' + (m.origen === 'RECIBO' ? 'recibo' : 'pago') + '">' + esc(m.origen_id) + '</span>' : icoBtn('movAnular', 'block', 'Anular', ' data-id="' + m.id + '"', 'rojo'))] }))) + '</section>';
 };
@@ -660,10 +666,49 @@ VISTAS.config = async function () {
     '<section class="card"><h2>Cuentas de tesorería ' + boton('ctaNueva', 'Nueva', 'add', '', 'btn-sm') + '</h2>' +
     tabla([{ t: 'Cuenta' }, { t: 'Tipo' }, { t: '' }], S.cuentas.map(c => ({ c: [esc(c.nombre) + (c.activo === 'NO' ? ' <span class="chip">Inactiva</span>' : ''), '<span class="chip">' + esc(c.tipo) + '</span>',
       icoBtn('ctaEditar', 'edit', 'Editar', ' data-id="' + c.id + '"')] }))) + '</section></div>' +
+    '<section class="card"><h2>App de gastos</h2><div id="gastos-cfg"><p class="muted small">Consultando tu app de gastos…</p></div></section>' +
     '<section class="card"><h2>Acceso y mantenimiento</h2><div class="acciones">' + boton('claveCambiar', 'Cambiar clave', 'key') +
     boton('reinstalar', 'Revisar instalación', 'build') + boton('desconectar', 'Desconectar este dispositivo', 'logout') + '</div>' +
     '<p class="muted small" style="margin-top:10px">"Revisar instalación" vuelve a crear las hojas que falten y reprograma la tarea diaria (abonos del día 1 y avisos). No borra datos.</p></section>';
+  api('gastos.estado', {}, { silencioso: true }).then(pintarGastos).catch(e => { const el = $('#gastos-cfg'); if (el) el.innerHTML = '<p class="neg small">' + esc(e.message) + '</p>'; });
 };
+
+/** Tarjeta "App de gastos" de Configuración, según el estado del vínculo. */
+function pintarGastos(e) {
+  const el = $('#gastos-cfg');
+  if (!el) return;
+  const url = '<div class="campo"><label for="g-url">Dirección de tu app de gastos</label><input id="g-url" type="url" value="' + esc(e.url) +
+    '" placeholder="https://script.google.com/macros/s/.../exec"><small>La misma URL que termina en /exec que usa tu app de gastos.</small></div>';
+  const pend = e.pendientes ? '<p class="small" style="margin-top:10px"><span class="chip ambar">' + e.pendientes + '</span> retiro(s) sin resolver. ' + boton('gastosReintentar', 'Reintentar', 'sync', '', 'btn-sm') + '</p>' : '';
+  if (e.estado === 'sin_vincular') {
+    el.innerHTML = '<p class="small" style="margin-bottom:12px">Los retiros que hagas pasan solos a tu app de gastos como ingreso. Si-Gestión se conecta como un dispositivo más, que vos aprobás desde tu app de gastos.</p>' +
+      '<div class="form">' + url + '<div class="modal-pie">' + boton('gastosVincular', 'Vincular', 'link', '', 'btn-primary') + '</div></div>' + pend;
+  } else if (e.estado === 'pendiente') {
+    el.innerHTML = '<p class="small"><span class="chip ambar">Esperando aprobación</span></p><ol class="pasos">' +
+      '<li>Abrí tu app de gastos y andá a la administración de dispositivos.</li>' +
+      '<li>Aprobá el dispositivo <b>Si-Gestión (Sipymes)</b>, código <b>' + esc(e.dispositivo) + '</b>.</li>' +
+      '<li>Volvé acá y tocá "Ya lo aprobé".</li></ol>' +
+      '<div class="acciones">' + boton('gastosActualizar', 'Ya lo aprobé', 'check', '', 'btn-primary') + boton('gastosDesvincular', 'Desvincular', 'link_off') + '</div>' + pend;
+  } else if (e.estado === 'error') {
+    el.innerHTML = '<p class="neg small" style="margin-bottom:12px">' + esc(e.mensaje) + '</p><div class="form">' + url +
+      '<div class="modal-pie">' + boton('gastosDesvincular', 'Desvincular', 'link_off') + boton('gastosActualizar', 'Reintentar', 'sync') + boton('gastosVincular', 'Vincular de nuevo', 'link', '', 'btn-primary') + '</div></div>' + pend;
+  } else {
+    const cats = e.catalogos.categorias, subs = e.catalogos.subcategorias;
+    const catSel = cats.find(c => c.nombre === e.categoria) || cats[0] || {};
+    el.innerHTML = '<p class="small" style="margin-bottom:12px"><span class="chip verde">Vinculada</span> Dispositivo ' + esc(e.dispositivo) + '. Elegí con qué entran los retiros en tu app de gastos:</p>' +
+      '<div class="form"><div class="campo"><label for="g-cat">Categoría (de ingreso)</label>' + selectHtml('g-cat', cats.map(c => [c.nombre, c.nombre]), catSel.nombre) + '</div>' +
+      '<div class="campo"><label for="g-sub">Subcategoría</label><select id="g-sub"></select></div>' +
+      '<div class="campo"><label for="g-medio">Medio de pago</label>' + selectHtml('g-medio', e.catalogos.medios.map(m => [m, m]), e.medio) + '</div>' +
+      '<div class="modal-pie">' + boton('gastosDesvincular', 'Desvincular', 'link_off') + boton('gastosGuardar', 'Guardar', 'save', '', 'btn-primary') + '</div></div>' + pend;
+    const subsDe = nom => { const c = cats.find(x => x.nombre === nom); return c ? subs.filter(x => x.categoria === c.id) : []; };
+    const llenarSub = () => {
+      const l = subsDe($('#g-cat').value);
+      $('#g-sub').innerHTML = '<option value="">—</option>' + l.map(x => '<option' + (x.nombre === e.subcategoria ? ' selected' : '') + '>' + esc(x.nombre) + '</option>').join('');
+    };
+    $('#g-cat').addEventListener('change', llenarSub); llenarSub();
+    if (!cats.length) el.querySelector('.form').insertAdjacentHTML('afterbegin', '<p class="neg small">Tu app de gastos no tiene categorías de ingreso activas. Creá una allá (por ejemplo "Sipymes") y tocá Reintentar.</p>');
+  }
+}
 
 // ------------------------------------------------------------ Formularios
 
@@ -799,8 +844,9 @@ function formCancelacion(circ, entidadId) {
     { n: 'importe', label: circ === 'VENTA' ? 'Importe cobrado' : 'Importe pagado', tipo: 'number', min: 0.01, req: true },
     { n: 'detalle', label: 'Detalle' }];
   let pend = [];
-  abrirForm({ titulo: C.Verbo, campos: campos, textoOk: circ === 'VENTA' ? 'Emitir recibo' : 'Emitir orden de pago', ok: async v => {
+  abrirForm({ titulo: C.Verbo, campos: campos, textoOk: circ === 'VENTA' ? 'Continuar' : 'Emitir orden de pago', ok: async v => {
     v.imputaciones = pend.map(p => ({ comprobante_id: p.id, importe: Number($('#imp-' + p.id).value) || 0 })).filter(i => i.importe > 0);
+    if (circ === 'VENTA') return cartelRetiro(v);
     const r = await api(C.nuevaCanc, v);
     toast(C.Canc + ' ' + r.id + ' emitido' + (r.a_cuenta > 0 ? '. Quedan ' + plata(r.a_cuenta) + ' a cuenta.' : '.'), 'ok');
   } });
@@ -828,6 +874,57 @@ function formCancelacion(circ, entidadId) {
   sel.addEventListener('change', cargar);
   imp.addEventListener('input', () => { delete imp.dataset.auto; distribuir(); });
   cargar();
+}
+
+/**
+ * Después de cargar un cobro: "¿Te llevás esta plata a tus finanzas?".
+ * Sí → se registran el cobro y el retiro juntos (el retiro va a la app de gastos). No → queda en Sipymes.
+ * Devuelve una promesa que se resuelve cuando el cobro quedó registrado o se canceló.
+ */
+function cartelRetiro(v) {
+  return new Promise(resolve => {
+    const cli = entidad('VENTA', v.entidad_id).nombre;
+    const resumen = '<div class="resumen"><div><b>' + esc(cli) + '</b><span>Cobro del ' + fecha(v.fecha) + '</span></div><b class="num">' + plata(v.importe) + '</b></div>';
+    async function emitir(retiro) {
+      try {
+        const r = await api('cobrar.recibo', Object.assign({}, v, retiro ? { retiro: retiro } : {}));
+        let t = 'Recibo ' + r.id + ' emitido' + (r.a_cuenta > 0 ? '. Quedan ' + plata(r.a_cuenta) + ' a cuenta' : '');
+        if (r.retiro) t += '. Retiro de ' + plata(r.retiro.importe) + (r.retiro.gastos_estado === 'ENVIADO' ? ' enviado a tu app de gastos.' : ' registrado; queda pendiente de pasar a tu app de gastos.');
+        else t += '.';
+        toast(t, 'ok');
+        resolve();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    function preguntar() {
+      abrirModal('<h2>¿Te llevás esta plata a tus finanzas?</h2>' + resumen +
+        '<div class="eleccion">' +
+        '<button type="button" class="opcion" id="rt-si">' + ico('savings') + '<b>Sí, me la llevo</b><span>Toda o una parte. Se registra el retiro y pasa a tu app de gastos con el nombre del cliente.</span></button>' +
+        '<button type="button" class="opcion" id="rt-no">' + ico('account_balance') + '<b>No, queda en Sipymes</b><span>Solo se registra el cobro.</span></button></div>' +
+        '<div class="modal-pie"><button type="button" class="btn" id="rt-cancelar">Cancelar</button></div>');
+      $('#rt-si').onclick = monto;
+      $('#rt-no').onclick = () => emitir(null);
+      $('#rt-cancelar').onclick = () => { cerrarModal(); resolve(); };
+    }
+    function monto() {
+      const cp = [
+        { n: 'importe', label: 'Importe que te llevás', tipo: 'number', min: 0.01, max: v.importe, valor: v.importe, req: true, ayuda: 'Si te llevás una parte, el resto queda en la cuenta de Sipymes.' },
+        { n: 'fecha', label: 'Fecha del retiro', tipo: 'date', valor: v.fecha, req: true }];
+      abrirModal('<h2>Retiro a tus finanzas</h2>' + resumen + '<form id="form-rt" class="form">' + cp.map(campoHtml).join('') +
+        '<div class="modal-pie"><button type="button" class="btn" id="rt-volver">' + ico('arrow_back') + 'Volver</button><button type="submit" class="btn btn-primary">Registrar cobro y retiro</button></div></form>');
+      $('#rt-volver').onclick = preguntar;
+      $('#form-rt').addEventListener('submit', e => { e.preventDefault(); emitir(valores(cp)); });
+    }
+    preguntar();
+  });
+}
+
+const ESTADO_GASTOS = {
+  ENVIADO: ['verde', 'En app de gastos'], PENDIENTE: ['ambar', 'Sin enviar'], ERROR: ['ambar', 'Sin enviar'],
+  BORRADO: ['', 'Borrado de app de gastos'], NO_ENVIADO: ['', 'No enviado'], BORRAR_ERROR: ['rojo', 'Falta borrar en app de gastos']
+};
+function chipGastos(m) {
+  const e = ESTADO_GASTOS[m.gastos_estado];
+  return e ? ' <span class="chip ' + e[0] + '"' + (m.gastos_error ? ' title="' + esc(m.gastos_error) + '"' : '') + '>' + e[1] + '</span>' : '';
 }
 
 function formAnular(titulo, accion, id) {
@@ -925,6 +1022,37 @@ const ACT = {
     ok: async v => { const t = await api('tesoreria.transferencia', v); toast('Transferencia ' + t.id + ' registrada.', 'ok'); } });
   },
   movAnular: d => formAnular('Anular movimiento', 'tesoreria.anular', d.id),
+  retNuevo: () => {
+    if (!optCuentas().length) return toast('Primero creá una cuenta de tesorería en Configuración.', 'error');
+    abrirForm({ titulo: 'Retiro a tus finanzas', nota: 'Plata que te llevás de Sipymes sin que venga de un cobro puntual. Para retirar lo de un cobro, usá el cartel que aparece al registrarlo. Pasa a tu app de gastos con este detalle.', campos: [
+      { n: 'cuenta_id', label: 'Sale de', tipo: 'select', opciones: optCuentas(), req: true },
+      { n: 'fecha', label: 'Fecha', tipo: 'date', valor: hoy(), req: true },
+      { n: 'importe', label: 'Importe', tipo: 'number', min: 0.01, req: true },
+      { n: 'detalle', label: 'Detalle', valor: 'Retiro personal', req: true }],
+    textoOk: 'Registrar retiro',
+    ok: async v => { const m = await api('tesoreria.retiro', v); toast('Retiro ' + m.id + (m.gastos_estado === 'ENVIADO' ? ' registrado y enviado a tu app de gastos.' : ' registrado; queda pendiente de pasar a tu app de gastos.'), 'ok'); } });
+  },
+  gastosReintentar: async () => {
+    const r = await api('gastos.reintentar');
+    toast(r.pendientes.length ? 'Quedan ' + r.pendientes.length + ' sin resolver: ' + (r.pendientes[0].error || '') : 'Listo: todo al día con tu app de gastos.', r.pendientes.length ? 'error' : 'ok');
+    recargar();
+  },
+  gastosVincular: async () => {
+    const url = $('#g-url').value.trim();
+    if (!url) return toast('Pegá la dirección de tu app de gastos.', 'error');
+    const e = await api('gastos.vincular', { url: url });
+    toast(e.estado === 'aprobado' ? 'Vinculada.' : 'Listo. Ahora aprobá el dispositivo en tu app de gastos.', 'ok');
+    pintarGastos(e);
+  },
+  gastosActualizar: async () => pintarGastos(await api('gastos.estado')),
+  gastosGuardar: async () => {
+    const r = await api('gastos.configurar', { categoria: $('#g-cat').value, subcategoria: $('#g-sub').value, medio: $('#g-medio').value });
+    toast('Guardado.' + (r.enviados ? ' Se enviaron ' + r.enviados + ' retiro(s) pendientes.' : ''), 'ok');
+    pintarGastos(await api('gastos.estado'));
+  },
+  gastosDesvincular: () => abrirForm({ titulo: 'Desvincular la app de gastos', peligro: true, textoOk: 'Desvincular', despues: false, campos: [],
+    nota: 'Los retiros nuevos dejan de pasar a tu app de gastos hasta que la vincules de nuevo. Lo que ya se mandó queda allá. Si querés, después quitá el dispositivo "Si-Gestión (Sipymes)" en tu app de gastos.',
+    ok: async () => { await api('gastos.desvincular'); toast('Desvinculada.', 'ok'); pintarGastos(await api('gastos.estado')); } }),
   infTipo: d => { S.inf.tipo = d.v; recargar(); },
   infExcel: () => {
     if (!S.infDatos) return toast('Esperá a que cargue el informe.', 'error');
