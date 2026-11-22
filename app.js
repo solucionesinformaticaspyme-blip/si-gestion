@@ -259,6 +259,8 @@ VISTAS.inicio = async function () {
         fecha(p.vencimiento) + (p.vencimiento < h ? ' <span class="chip rojo">Vencido</span>' : p.vencimiento === h ? ' <span class="chip ambar">Hoy</span>' : ''),
         plata(p.pendiente), boton('cancNueva', 'Pagar', '', ' data-c="COMPRA" data-id="' + p.entidad_id + '"', 'btn-sm')] })))
       : '<p class="vacio">Nada por pagar en los próximos días.</p>') + '</section></div>' +
+    (d.maestra_error ? '<section class="card aviso"><h2>No se pudo actualizar la planilla MAESTRA ' + boton('maestraSync', 'Reintentar', 'sync', '', 'btn-sm') + '</h2>' +
+      '<p class="small">' + esc(d.maestra_error) + '</p></section>' : '') +
     (d.respaldo && d.respaldo.error ? '<section class="card aviso"><h2>La copia de seguridad semanal no se pudo hacer ' + boton('respaldoHacer', 'Reintentar', 'sync', '', 'btn-sm') + '</h2>' +
       '<p class="small">' + esc(d.respaldo.error) + '</p><p class="muted small">Si dice que falta permiso, ejecutá una vez <b>respaldarAhora</b> desde el editor de Apps Script.</p></section>' : '') +
     (d.gastos_pendientes && d.gastos_pendientes.length ? '<section class="card aviso"><h2>Retiros sin resolver con tu app de gastos <span class="chip ambar">' + d.gastos_pendientes.length + '</span> ' +
@@ -692,21 +694,25 @@ VISTAS.config = async function () {
     campoHtml({ n: 'empresa', label: 'Nombre de la empresa', valor: g.empresa }) +
     campoHtml({ n: 'dia_limite_default', label: 'Día límite de cobro general', tipo: 'number', step: 1, min: 1, max: 31, valor: g.dia_limite_default, ayuda: 'Se usa para los clientes que no tienen un día propio.' }) +
     campoHtml({ n: 'email_avisos', label: 'Mail para avisos', tipo: 'email', valor: g.email_avisos, ayuda: 'Vacío: se usa el mail de la cuenta dueña del servidor.' }) +
+    campoHtml({ n: 'maestra_id', label: 'Planilla MAESTRA (ID)', valor: g.maestra_id, ayuda: 'El código largo que aparece en la dirección de la planilla, entre /d/ y /edit.' }) +
     '<div class="modal-pie">' + boton('cfgGuardar', 'Guardar', 'save', '', 'btn-primary') + '</div></form></section>' +
     '<section class="card"><h2>Numeración</h2>' + tabla([{ t: 'Tipo' }, { t: 'Último número', c: 'num' }], S.numeradores.map(n => ({ c: [esc(n.tipo), n.ultimo] }))) +
     '<p class="muted small" style="margin-top:10px">La asigna el sistema: correlativa, sin repetir ni saltear.</p></section></div>' +
     '<div class="dos"><section class="card"><h2>Conceptos ' + boton('conNuevo', 'Nuevo', 'add', '', 'btn-sm') + '</h2>' +
     tabla([{ t: 'Concepto' }, { t: 'Tipo' }, { t: 'Rubro', c: 'hm' }, { t: '' }], S.conceptos.map(c => ({ c: [esc(c.nombre) + (c.activo === 'NO' ? ' <span class="chip">Inactivo</span>' : ''),
-      tipoChip(c), esc(c.rubro), icoBtn('conEditar', 'edit', 'Editar', ' data-id="' + c.id + '"')] }))) +
+      tipoChip(c) + (c.app ? ' <span class="chip">' + esc(c.app) + '</span>' : ''), esc(c.rubro), icoBtn('conEditar', 'edit', 'Editar', ' data-id="' + c.id + '"')] }))) +
     '<p class="muted small" style="margin-top:10px">Los de ingreso se usan en ventas; los de gasto, en compras. El rubro agrupa en los informes.</p></section>' +
     '<section class="card"><h2>Cuentas de tesorería ' + boton('ctaNueva', 'Nueva', 'add', '', 'btn-sm') + '</h2>' +
     tabla([{ t: 'Cuenta' }, { t: 'Tipo' }, { t: '' }], S.cuentas.map(c => ({ c: [esc(c.nombre) + (c.activo === 'NO' ? ' <span class="chip">Inactiva</span>' : ''), '<span class="chip">' + esc(c.tipo) + '</span>',
       icoBtn('ctaEditar', 'edit', 'Editar', ' data-id="' + c.id + '"')] }))) + '</section></div>' +
+    '<section class="card"><h2>Planilla MAESTRA ' + boton('maestraSync', 'Actualizar ahora', 'sync', '', 'btn-sm') + '</h2><div id="maestra-cfg"><p class="muted small">Consultando…</p></div></section>' +
     '<section class="card"><h2>Copia de seguridad ' + boton('respaldoHacer', 'Hacer una copia ahora', 'backup', '', 'btn-sm') + '</h2><div id="respaldo-cfg"><p class="muted small">Consultando…</p></div></section>' +
     '<section class="card"><h2>App de gastos</h2><div id="gastos-cfg"><p class="muted small">Consultando tu app de gastos…</p></div></section>' +
     '<section class="card"><h2>Acceso y mantenimiento</h2><div class="acciones">' + boton('claveCambiar', 'Cambiar clave', 'key') +
     boton('reinstalar', 'Revisar instalación', 'build') + boton('desconectar', 'Desconectar este dispositivo', 'logout') + '</div>' +
     '<p class="muted small" style="margin-top:10px">"Revisar instalación" vuelve a crear las hojas que falten y reprograma la tarea diaria (abonos del día 1 y avisos). No borra datos.</p></section>';
+  api('maestra.apps', {}, { silencioso: true }).then(a => { S.apps = a; }).catch(() => {});
+  api('maestra.estado', {}, { silencioso: true }).then(pintarMaestra).catch(() => {});
   api('respaldo.estado', {}, { silencioso: true }).then(r => {
     const el = $('#respaldo-cfg'); if (!el) return;
     el.innerHTML = '<p class="small">' + (r.ultimo ? 'Última copia: <b>' + esc(fecha(r.ultimo.slice(0, 10)) + ' ' + r.ultimo.slice(11)) + '</b>' + (r.carpeta_url ? ' · <a href="' + esc(r.carpeta_url) + '" target="_blank" rel="noopener">Ver carpeta</a>' : '') : 'Todavía no se hizo ninguna copia.') + '</p>' +
@@ -715,6 +721,17 @@ VISTAS.config = async function () {
   }).catch(() => {});
   api('gastos.estado', {}, { silencioso: true }).then(pintarGastos).catch(e => { const el = $('#gastos-cfg'); if (el) el.innerHTML = '<p class="neg small">' + esc(e.message) + '</p>'; });
 };
+
+/** Tarjeta "Planilla MAESTRA" de Configuración. */
+function pintarMaestra(m) {
+  const el = $('#maestra-cfg'); if (!el) return;
+  const r = m.resumen || {};
+  el.innerHTML = '<p class="small">' + (m.ultimo ? 'Última actualización: <b>' + esc(fecha(m.ultimo.slice(0, 10)) + ' ' + m.ultimo.slice(11)) + '</b> · ' +
+      (r.clientes || 0) + ' clientes, ' + (r.cuotas || 0) + ' cuotas, ' + (r.ventas || 0) + ' ventas' : 'Todavía no se actualizó.') +
+    ' · <a href="' + esc(m.url) + '" target="_blank" rel="noopener">Abrir la MAESTRA</a></p>' +
+    (m.error ? '<p class="neg small">' + esc(m.error) + '</p>' : '') +
+    '<p class="muted small" style="margin-top:8px">Todos los días a las 7, Si-Gestión reescribe en la MAESTRA las hojas CLIENTES, CUOTAS y VENTAS (no las cargues a mano: se pisan). LICENCIAS y DESARROLLOS no se tocan. Para que una venta pase, su concepto tiene que tener una app asignada.</p>';
+}
 
 /** Tarjeta "App de gastos" de Configuración, según el estado del vínculo. */
 function pintarGastos(e) {
@@ -993,7 +1010,13 @@ function formAnular(titulo, accion, id) {
 function formMaestro(titulo, accion, o, tipos) {
   o = o || {};
   const campos = [{ n: 'nombre', label: 'Nombre', req: true, valor: o.nombre }, { n: 'tipo', label: 'Tipo', tipo: 'select', opciones: tipos, valor: o.tipo }];
-  if (accion === 'conceptos.guardar') campos.push({ n: 'rubro', label: 'Rubro', valor: o.rubro });
+  if (accion === 'conceptos.guardar') {
+    campos.push({ n: 'rubro', label: 'Rubro', valor: o.rubro });
+    const apps = (S.apps || []).map(a => [a.id, a.id + ' – ' + a.nombre]);
+    if (o.app && !apps.some(a => a[0] === o.app)) apps.push([o.app, o.app]);
+    campos.push({ n: 'app', label: 'App de la MAESTRA', tipo: 'select', valor: o.app || '', opciones: [['', 'Ninguna']].concat(apps),
+      ayuda: 'Solo para ingresos. Las ventas de este concepto pasan a la MAESTRA (abonos a CUOTAS, el resto a VENTAS).' });
+  }
   if (o.id) campos.push({ n: 'activo', label: 'Estado', tipo: 'select', valor: o.activo === 'NO' ? 'NO' : 'SI', opciones: [['SI', 'Activo'], ['NO', 'Inactivo']] });
   abrirForm({ titulo: titulo, campos: campos, ok: async v => { if (o.id) v.id = o.id; await api(accion, v); toast('Guardado.', 'ok'); await cargarMaestros(); } });
 }
@@ -1138,13 +1161,19 @@ const ACT = {
     if (d.v === 'anio') { S.inf.desde = m.slice(0, 4) + '-01'; S.inf.hasta = m; }
     recargar();
   },
+  maestraSync: async () => {
+    const m = await api('maestra.sincronizar');
+    toast('MAESTRA actualizada: ' + m.resumen.clientes + ' clientes, ' + m.resumen.cuotas + ' cuotas, ' + m.resumen.ventas + ' ventas.', 'ok');
+    pintarMaestra(m);
+    if (S.vista === 'inicio') recargar();
+  },
   respaldoHacer: async () => {
     const r = await api('respaldo.hacer');
     toast('Copia de seguridad hecha (' + r.ultimo + ').', 'ok');
     recargar();
   },
   cfgGuardar: async () => {
-    const v = { empresa: $('#f-empresa').value.trim(), dia_limite_default: $('#f-dia_limite_default').value.trim(), email_avisos: $('#f-email_avisos').value.trim() };
+    const v = { empresa: $('#f-empresa').value.trim(), dia_limite_default: $('#f-dia_limite_default').value.trim(), email_avisos: $('#f-email_avisos').value.trim(), maestra_id: $('#f-maestra_id').value.trim() };
     if (!$('#cfg').reportValidity()) return;
     await api('config.guardar', v); toast('Configuración guardada.', 'ok'); recargar();
   },
