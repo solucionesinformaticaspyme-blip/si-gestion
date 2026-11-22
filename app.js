@@ -13,7 +13,7 @@ const S = {
   fTes: { mes: mesActual(), cuenta_id: '', anulados: false },
   fCli: { q: '', inactivos: false }, fPro: { q: '', inactivos: false },
   comprasTab: 'comprobantes',
-  inf: { tipo: 'rentabilidad', desde: mesRel(-11), hasta: mesActual(), fecha: hoy() }
+  inf: { tipo: 'rentabilidad', desde: mesRel(-11), hasta: mesActual(), fecha: hoy(), todo: false }
 };
 
 // Menú: [vista, ícono, texto largo, texto corto]
@@ -132,6 +132,9 @@ function campoHtml(c) {
   const id = 'f-' + c.n, v = c.valor === undefined || c.valor === null ? '' : c.valor;
   const req = c.req ? ' required' : '';
   let ctl;
+  if (c.tipo === 'check') {
+    return '<div class="campo" id="c-' + c.n + '"><label class="check-linea"><input type="checkbox" id="' + id + '"' + (c.valor ? ' checked' : '') + '> ' + c.label + '</label>' + (c.ayuda ? '<small>' + c.ayuda + '</small>' : '') + '</div>';
+  }
   if (c.tipo === 'select') {
     ctl = '<select id="' + id + '"' + req + '>' + (c.opciones || []).map(o => '<option value="' + esc(o[0]) + '"' + (String(o[0]) === String(v) ? ' selected' : '') + '>' + esc(o[1]) + '</option>').join('') + '</select>';
   } else if (c.tipo === 'textarea') {
@@ -148,7 +151,7 @@ function valores(campos) {
   const v = {};
   campos.forEach(c => {
     const el = $('#f-' + c.n);
-    v[c.n] = c.tipo === 'number' ? (el.value === '' ? '' : Number(el.value)) : el.value.trim();
+    v[c.n] = c.tipo === 'check' ? el.checked : c.tipo === 'number' ? (el.value === '' ? '' : Number(el.value)) : el.value.trim();
   });
   return v;
 }
@@ -243,6 +246,7 @@ VISTAS.inicio = async function () {
     kpi('shopping_cart', 'Gastos del mes', plata(d.gastos_mes)) +
     kpi('payments', 'Cobrado en el mes', plata(d.cobrado_mes)) +
     kpi('outbox', 'Pagado en el mes', plata(d.pagado_mes)) +
+    (d.sin_retirar === undefined ? '' : kpi('savings', 'Sin retirar (acumulado)', plata(d.sin_retirar))) +
     '</div><div class="dos">' +
     '<section class="card"><h2>Clientes sin cobro pasada la fecha límite <span class="chip ' + (d.avisos.length ? 'rojo' : 'verde') + '">' + d.avisos.length + '</span></h2>' +
     (d.avisos.length ? tabla([{ t: 'Cliente' }, { t: 'Venció', c: 'hm' }, { t: 'Días', c: 'num' }, { t: 'Pendiente', c: 'num' }, { t: '' }],
@@ -255,6 +259,8 @@ VISTAS.inicio = async function () {
         fecha(p.vencimiento) + (p.vencimiento < h ? ' <span class="chip rojo">Vencido</span>' : p.vencimiento === h ? ' <span class="chip ambar">Hoy</span>' : ''),
         plata(p.pendiente), boton('cancNueva', 'Pagar', '', ' data-c="COMPRA" data-id="' + p.entidad_id + '"', 'btn-sm')] })))
       : '<p class="vacio">Nada por pagar en los próximos días.</p>') + '</section></div>' +
+    (d.respaldo && d.respaldo.error ? '<section class="card aviso"><h2>La copia de seguridad semanal no se pudo hacer ' + boton('respaldoHacer', 'Reintentar', 'sync', '', 'btn-sm') + '</h2>' +
+      '<p class="small">' + esc(d.respaldo.error) + '</p><p class="muted small">Si dice que falta permiso, ejecutá una vez <b>respaldarAhora</b> desde el editor de Apps Script.</p></section>' : '') +
     (d.gastos_pendientes && d.gastos_pendientes.length ? '<section class="card aviso"><h2>Retiros sin resolver con tu app de gastos <span class="chip ambar">' + d.gastos_pendientes.length + '</span> ' +
       boton('gastosReintentar', 'Reintentar', 'sync', '', 'btn-sm') + '</h2>' +
       tabla([{ t: 'Fecha' }, { t: 'Retiro' }, { t: 'Importe', c: 'num' }, { t: 'Qué pasa', c: 'hm' }],
@@ -442,7 +448,7 @@ VISTAS.tesoreria = async function () {
 
 // ---------- Informes
 
-const INFORMES = [['rentabilidad', 'Rentabilidad por mes'], ['ventas', 'Ventas por concepto'], ['gastos', 'Gastos por concepto'], ['saldos', 'Saldos']];
+const INFORMES = [['rentabilidad', 'Rentabilidad por mes'], ['ventas', 'Ventas por concepto'], ['gastos', 'Gastos por concepto'], ['saldos', 'Saldos'], ['retiros', 'Cobrado vs. retirado']];
 const COLOR_ING = '#14737C', COLOR_GAS = '#FF914D';   // colores Sipymes; validados para daltonismo (ΔE 20,9). El naranja tiene poco contraste: por eso hay tabla y detalle al pasar el mouse
 
 VISTAS.informes = async function () {
@@ -450,10 +456,13 @@ VISTAS.informes = async function () {
   S.infDatos = null;
   $('#acciones').innerHTML = boton('infExcel', 'Excel', 'table_view') + boton('infPdf', 'PDF', 'picture_as_pdf', '', 'btn-primary');
   const seg = '<div class="seg">' + INFORMES.map(t => '<button class="' + (t[0] === I.tipo ? 'on' : '') + '" data-act="infTipo" data-v="' + t[0] + '">' + t[1] + '</button>').join('') + '</div>';
+  const todo = I.tipo === 'retiros' && I.todo;
   const filtros = I.tipo === 'saldos'
     ? '<div class="campo"><label for="fi-fecha">Saldos al</label><input id="fi-fecha" type="date" value="' + I.fecha + '" data-chg="infFiltro"></div>'
-    : '<div class="campo"><label for="fi-desde">Desde</label><input id="fi-desde" type="month" value="' + I.desde + '" data-chg="infFiltro"></div>' +
-      '<div class="campo"><label for="fi-hasta">Hasta</label><input id="fi-hasta" type="month" value="' + I.hasta + '" data-chg="infFiltro"></div>';
+    : '<div class="campo"><label for="fi-desde">Desde</label><input id="fi-desde" type="month" value="' + I.desde + '" data-chg="infFiltro"' + (todo ? ' disabled' : '') + '></div>' +
+      '<div class="campo"><label for="fi-hasta">Hasta</label><input id="fi-hasta" type="month" value="' + I.hasta + '" data-chg="infFiltro"' + (todo ? ' disabled' : '') + '></div>' +
+      (I.tipo === 'retiros' ? '<div class="seg rango">' + [['mes', 'Este mes'], ['anio', 'Este año'], ['todo', 'Desde el inicio']].map(x =>
+        '<button class="' + (x[0] === rangoActual() ? 'on' : '') + '" data-act="infRango" data-v="' + x[0] + '">' + x[1] + '</button>').join('') + '</div>' : '');
   let cuerpo;
   if (I.tipo === 'rentabilidad') {
     const r = await api('informes.rentabilidad', { desde: I.desde, hasta: I.hasta });
@@ -472,6 +481,17 @@ VISTAS.informes = async function () {
       tabla([{ t: 'Concepto' }, { t: 'Rubro', c: 'hm' }].concat(r.meses.map(m => ({ t: nomMes(m), c: 'num' }))).concat([{ t: 'Total', c: 'num' }]),
         r.filas.map(f => ({ c: ['<b>' + esc(f.concepto) + '</b>', esc(f.rubro)].concat(f.valores.map(v => v ? plata(v) : '<span class="muted">—</span>')).concat(['<b>' + plata(f.total) + '</b>']) })),
         ['Total', ''].concat(r.totales.map(plata)).concat([plata(r.total)])) + '</section>';
+  } else if (I.tipo === 'retiros') {
+    const r = await api('informes.retiros', I.todo ? { todo: true } : { desde: I.desde, hasta: I.hasta });
+    S.infDatos = r;
+    const filas = r.filas.map(f => ({ c: ['<button class="link" data-act="cuenta" data-c="VENTA" data-id="' + f.cliente_id + '">' + esc(f.cliente) + '</button>',
+      plata(f.cobrado), f.retirado ? plata(f.retirado) : '<span class="muted">—</span>', '<b>' + plata(f.quedo) + '</b>'] }));
+    if (r.sin_cliente) filas.push({ c: ['<span class="muted">Retiros sin cliente</span>', '<span class="muted">—</span>', plata(r.sin_cliente), '<span class="neg">' + plata(-r.sin_cliente) + '</span>'] });
+    cuerpo = '<div class="kpi-grid">' + kpi('payments', 'Cobrado', plata(r.total.cobrado)) + kpi('savings', 'Retirado', plata(r.total.retirado)) +
+      kpi('account_balance', 'Quedó en la empresa', plata(r.total.quedo), r.total.quedo < 0 ? 'bad' : 'ok') + '</div>' +
+      '<section class="card"><h2>Por cliente</h2>' + (filas.length ? tabla([{ t: 'Cliente' }, { t: 'Cobrado', c: 'num' }, { t: 'Retirado', c: 'num' }, { t: 'Quedó en la empresa', c: 'num' }], filas,
+        ['Total', plata(r.total.cobrado), plata(r.total.retirado), plata(r.total.quedo)]) : '<p class="vacio">No hay cobros en el período.</p>') +
+      '<p class="muted small" style="margin-top:10px">Cada retiro hecho con un cobro cuenta en el mes de ese cobro. "Retiros sin cliente" son los que hiciste desde Tesorería sin elegir un cobro.</p></section>';
   } else {
     const r = await api('informes.saldos', { fecha: I.fecha });
     S.infDatos = r;
@@ -487,6 +507,14 @@ VISTAS.informes = async function () {
   $('#main').innerHTML = seg + '<section class="card"><div class="filtros">' + filtros + '</div></section>' + cuerpo;
   if (I.tipo === 'rentabilidad') dibujarGrafico();
 };
+
+function rangoActual() {
+  const I = S.inf, m = mesActual();
+  if (I.todo) return 'todo';
+  if (I.desde === m && I.hasta === m) return 'mes';
+  if (I.desde === m.slice(0, 4) + '-01' && I.hasta === m) return 'anio';
+  return '';
+}
 
 /** Columnas agrupadas ingresos/gastos por mes, un solo eje, con leyenda y detalle al pasar el mouse. */
 function dibujarGrafico() {
@@ -562,6 +590,14 @@ function hojasInforme() {
       { negrita: true, celdas: [tit + ' – ' + nomMes(r.desde) + ' a ' + nomMes(r.hasta)] }, { celdas: [] },
       enc(['Concepto', 'Rubro'].concat(r.meses.map(nomMes)).concat(['Total']))].concat(r.filas.map(f => ({ celdas: [f.concepto, f.rubro].concat(f.valores.map(num)).concat([num(f.total)]) })))
       .concat([{ negrita: true, celdas: ['Total', ''].concat(r.totales.map(num)).concat([num(r.total)]) }]) }];
+  }
+  if (I.tipo === 'retiros') {
+    const per = r.todo ? 'desde el inicio' : nomMes(r.desde) + ' a ' + nomMes(r.hasta);
+    const filas = r.filas.map(f => ({ celdas: [f.cliente, num(f.cobrado), num(f.retirado), num(f.quedo)] }));
+    if (r.sin_cliente) filas.push({ celdas: ['Retiros sin cliente', '', num(r.sin_cliente), num(-r.sin_cliente)] });
+    return [{ nombre: 'Cobrado vs retirado', anchos: [32, 18, 18, 22], filas: [
+      { negrita: true, celdas: ['Cobrado vs. retirado – ' + per] }, { celdas: [] }, enc(['Cliente', 'Cobrado', 'Retirado', 'Quedó en la empresa'])]
+      .concat(filas).concat([{ negrita: true, celdas: ['Total', num(r.total.cobrado), num(r.total.retirado), num(r.total.quedo)] }]) }];
   }
   const hoja = (nombre, l, conVenc) => ({ nombre: nombre, anchos: [32, 18, 18, 18], filas: [
     { negrita: true, celdas: [nombre + ' – saldos al ' + fecha(r.fecha)] }, { celdas: [] },
@@ -666,10 +702,17 @@ VISTAS.config = async function () {
     '<section class="card"><h2>Cuentas de tesorería ' + boton('ctaNueva', 'Nueva', 'add', '', 'btn-sm') + '</h2>' +
     tabla([{ t: 'Cuenta' }, { t: 'Tipo' }, { t: '' }], S.cuentas.map(c => ({ c: [esc(c.nombre) + (c.activo === 'NO' ? ' <span class="chip">Inactiva</span>' : ''), '<span class="chip">' + esc(c.tipo) + '</span>',
       icoBtn('ctaEditar', 'edit', 'Editar', ' data-id="' + c.id + '"')] }))) + '</section></div>' +
+    '<section class="card"><h2>Copia de seguridad ' + boton('respaldoHacer', 'Hacer una copia ahora', 'backup', '', 'btn-sm') + '</h2><div id="respaldo-cfg"><p class="muted small">Consultando…</p></div></section>' +
     '<section class="card"><h2>App de gastos</h2><div id="gastos-cfg"><p class="muted small">Consultando tu app de gastos…</p></div></section>' +
     '<section class="card"><h2>Acceso y mantenimiento</h2><div class="acciones">' + boton('claveCambiar', 'Cambiar clave', 'key') +
     boton('reinstalar', 'Revisar instalación', 'build') + boton('desconectar', 'Desconectar este dispositivo', 'logout') + '</div>' +
     '<p class="muted small" style="margin-top:10px">"Revisar instalación" vuelve a crear las hojas que falten y reprograma la tarea diaria (abonos del día 1 y avisos). No borra datos.</p></section>';
+  api('respaldo.estado', {}, { silencioso: true }).then(r => {
+    const el = $('#respaldo-cfg'); if (!el) return;
+    el.innerHTML = '<p class="small">' + (r.ultimo ? 'Última copia: <b>' + esc(fecha(r.ultimo.slice(0, 10)) + ' ' + r.ultimo.slice(11)) + '</b>' + (r.carpeta_url ? ' · <a href="' + esc(r.carpeta_url) + '" target="_blank" rel="noopener">Ver carpeta</a>' : '') : 'Todavía no se hizo ninguna copia.') + '</p>' +
+      (r.error ? '<p class="neg small">' + esc(r.error) + '</p>' : '') +
+      '<p class="muted small" style="margin-top:8px">Una vez por semana se copia la planilla de datos a la carpeta "Si-Gestión - Respaldos" de tu Drive. Se guardan las ' + r.guardar + ' copias más nuevas; las anteriores van a la papelera de Drive.</p>';
+  }).catch(() => {});
   api('gastos.estado', {}, { silencioso: true }).then(pintarGastos).catch(e => { const el = $('#gastos-cfg'); if (el) el.innerHTML = '<p class="neg small">' + esc(e.message) + '</p>'; });
 };
 
@@ -898,7 +941,7 @@ function cartelRetiro(v) {
     function preguntar() {
       abrirModal('<h2>¿Te llevás esta plata a tus finanzas?</h2>' + resumen +
         '<div class="eleccion">' +
-        '<button type="button" class="opcion" id="rt-si">' + ico('savings') + '<b>Sí, me la llevo</b><span>Toda o una parte. Se registra el retiro y pasa a tu app de gastos con el nombre del cliente.</span></button>' +
+        '<button type="button" class="opcion" id="rt-si">' + ico('savings') + '<b>Sí, me la llevo</b><span>Toda o una parte. Se registra el retiro y pasa a tu app de gastos como "' + esc(cli) + ' - Honorarios ' + v.fecha.slice(5, 7) + '/' + v.fecha.slice(0, 4) + '".</span></button>' +
         '<button type="button" class="opcion" id="rt-no">' + ico('account_balance') + '<b>No, queda en Sipymes</b><span>Solo se registra el cobro.</span></button></div>' +
         '<div class="modal-pie"><button type="button" class="btn" id="rt-cancelar">Cancelar</button></div>');
       $('#rt-si').onclick = monto;
@@ -906,13 +949,28 @@ function cartelRetiro(v) {
       $('#rt-cancelar').onclick = () => { cerrarModal(); resolve(); };
     }
     function monto() {
-      const cp = [
-        { n: 'importe', label: 'Importe que te llevás', tipo: 'number', min: 0.01, max: v.importe, valor: v.importe, req: true, ayuda: 'Si te llevás una parte, el resto queda en la cuenta de Sipymes.' },
-        { n: 'fecha', label: 'Fecha del retiro', tipo: 'date', valor: v.fecha, req: true }];
-      abrirModal('<h2>Retiro a tus finanzas</h2>' + resumen + '<form id="form-rt" class="form">' + cp.map(campoHtml).join('') +
+      abrirModal('<h2>Retiro a tus finanzas</h2>' + resumen + '<form id="form-rt" class="form">' +
+        '<div class="campo"><label for="rt-total">Total cobrado</label><input id="rt-total" type="text" value="' + plata(v.importe) + '" disabled></div>' +
+        '<label class="check-linea"><input type="checkbox" id="rt-todo"> Retirar todo</label>' +
+        '<div class="campo"><label for="rt-importe">Importe que te llevás</label><input id="rt-importe" type="number" step="0.01" min="0.01" max="' + v.importe + '" inputmode="decimal" required autocomplete="off">' +
+        '<small>Es lo que pasa a tu app de gastos. Lo que no retirás queda en la cuenta de Sipymes.</small></div>' +
+        campoHtml({ n: 'fecha', label: 'Fecha del retiro', tipo: 'date', valor: v.fecha, req: true }) +
         '<div class="modal-pie"><button type="button" class="btn" id="rt-volver">' + ico('arrow_back') + 'Volver</button><button type="submit" class="btn btn-primary">Registrar cobro y retiro</button></div></form>');
+      const todo = $('#rt-todo'), imp = $('#rt-importe');
+      todo.addEventListener('change', () => {
+        imp.disabled = todo.checked;
+        imp.value = todo.checked ? v.importe : '';
+        if (!todo.checked) imp.focus();
+      });
       $('#rt-volver').onclick = preguntar;
-      $('#form-rt').addEventListener('submit', e => { e.preventDefault(); emitir(valores(cp)); });
+      $('#form-rt').addEventListener('submit', e => {
+        e.preventDefault();
+        const importe = todo.checked ? Number(v.importe) : Number(imp.value);
+        if (!(importe > 0)) return toast('Completá el importe que te llevás, o tildá "Retirar todo".', 'error');
+        if (importe > Number(v.importe)) return toast('No podés retirar más de lo cobrado (' + plata(v.importe) + ').', 'error');
+        emitir({ importe: importe, fecha: $('#f-fecha').value });
+      });
+      if (window.innerWidth > 860) imp.focus();
     }
     preguntar();
   });
@@ -920,7 +978,7 @@ function cartelRetiro(v) {
 
 const ESTADO_GASTOS = {
   ENVIADO: ['verde', 'En app de gastos'], PENDIENTE: ['ambar', 'Sin enviar'], ERROR: ['ambar', 'Sin enviar'],
-  BORRADO: ['', 'Borrado de app de gastos'], NO_ENVIADO: ['', 'No enviado'], BORRAR_ERROR: ['rojo', 'Falta borrar en app de gastos']
+  BORRADO: ['', 'Borrado de app de gastos'], NO_ENVIADO: ['', 'No enviado'], NO_ENVIAR: ['', 'No se envía'], BORRAR_ERROR: ['rojo', 'Falta borrar en app de gastos']
 };
 function chipGastos(m) {
   const e = ESTADO_GASTOS[m.gastos_estado];
@@ -1022,15 +1080,28 @@ const ACT = {
     ok: async v => { const t = await api('tesoreria.transferencia', v); toast('Transferencia ' + t.id + ' registrada.', 'ok'); } });
   },
   movAnular: d => formAnular('Anular movimiento', 'tesoreria.anular', d.id),
-  retNuevo: () => {
+  retNuevo: async () => {
     if (!optCuentas().length) return toast('Primero creá una cuenta de tesorería en Configuración.', 'error');
-    abrirForm({ titulo: 'Retiro a tus finanzas', nota: 'Plata que te llevás de Sipymes sin que venga de un cobro puntual. Para retirar lo de un cobro, usá el cartel que aparece al registrarlo. Pasa a tu app de gastos con este detalle.', campos: [
+    const cobros = await api('tesoreria.paraRetirar');
+    abrirForm({ titulo: 'Retiro a tus finanzas', nota: 'Plata que te llevás de la empresa. Si viene de un cobro que ya registraste, elegilo: así figura con ese cliente en "Cobrado vs. retirado".', campos: [
+      { n: 'recibo_id', label: '¿De qué cobro?', tipo: 'select', opciones: [['', 'Ninguno: retiro general']].concat(cobros.map(c => [c.id, fecha(c.fecha) + ' – ' + c.cliente + ' – quedan ' + plata(c.disponible)])) },
       { n: 'cuenta_id', label: 'Sale de', tipo: 'select', opciones: optCuentas(), req: true },
       { n: 'fecha', label: 'Fecha', tipo: 'date', valor: hoy(), req: true },
       { n: 'importe', label: 'Importe', tipo: 'number', min: 0.01, req: true },
-      { n: 'detalle', label: 'Detalle', valor: 'Retiro personal', req: true }],
+      { n: 'detalle', label: 'Detalle', valor: 'Retiro personal', req: true },
+      { n: 'no_enviar', label: 'Ya lo cargué en mi app de gastos (no enviarlo)', tipo: 'check' }],
     textoOk: 'Registrar retiro',
-    ok: async v => { const m = await api('tesoreria.retiro', v); toast('Retiro ' + m.id + (m.gastos_estado === 'ENVIADO' ? ' registrado y enviado a tu app de gastos.' : ' registrado; queda pendiente de pasar a tu app de gastos.'), 'ok'); } });
+    ok: async v => {
+      const m = await api('tesoreria.retiro', v);
+      toast('Retiro ' + m.id + (m.gastos_estado === 'ENVIADO' ? ' registrado y enviado a tu app de gastos.' : m.gastos_estado === 'NO_ENVIAR' ? ' registrado (no se manda a tu app de gastos).' : ' registrado; queda pendiente de pasar a tu app de gastos.'), 'ok');
+    } });
+    $('#f-recibo_id').addEventListener('change', () => {
+      const c = cobros.find(x => x.id === $('#f-recibo_id').value), imp = $('#f-importe');
+      $('#c-detalle').style.display = c ? 'none' : '';
+      $('#f-detalle').required = !c;
+      if (c) { imp.value = c.disponible; imp.max = c.disponible; if (c.cuenta_id) $('#f-cuenta_id').value = c.cuenta_id; }
+      else imp.removeAttribute('max');
+    });
   },
   gastosReintentar: async () => {
     const r = await api('gastos.reintentar');
@@ -1059,7 +1130,19 @@ const ACT = {
     const t = INFORMES.find(x => x[0] === S.inf.tipo)[1];
     descargar(xlsx(hojasInforme()), t + ' - ' + hoy() + '.xlsx');
   },
-  infPdf: () => descargarPdf('informes.pdf', { informe: S.inf.tipo, params: S.inf.tipo === 'saldos' ? { fecha: S.inf.fecha } : { desde: S.inf.desde, hasta: S.inf.hasta } }),
+  infPdf: () => descargarPdf('informes.pdf', { informe: S.inf.tipo, params: S.inf.tipo === 'saldos' ? { fecha: S.inf.fecha } : S.inf.tipo === 'retiros' && S.inf.todo ? { todo: true } : { desde: S.inf.desde, hasta: S.inf.hasta } }),
+  infRango: d => {
+    const m = mesActual();
+    S.inf.todo = d.v === 'todo';
+    if (d.v === 'mes') { S.inf.desde = m; S.inf.hasta = m; }
+    if (d.v === 'anio') { S.inf.desde = m.slice(0, 4) + '-01'; S.inf.hasta = m; }
+    recargar();
+  },
+  respaldoHacer: async () => {
+    const r = await api('respaldo.hacer');
+    toast('Copia de seguridad hecha (' + r.ultimo + ').', 'ok');
+    recargar();
+  },
   cfgGuardar: async () => {
     const v = { empresa: $('#f-empresa').value.trim(), dia_limite_default: $('#f-dia_limite_default').value.trim(), email_avisos: $('#f-email_avisos').value.trim() };
     if (!$('#cfg').reportValidity()) return;
