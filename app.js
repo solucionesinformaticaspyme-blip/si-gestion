@@ -76,7 +76,105 @@ function toast(msg, tipo) {
   clearTimeout(tToast); tToast = setTimeout(() => t.classList.add('hidden'), tipo === 'error' ? 5500 : 3000);
 }
 
+// ------------------------------------------------------------ Velocidad: lo ya visto se muestra al instante
+// Cada consulta se guarda en este dispositivo. Al volver a una pantalla se muestra lo guardado sin esperar al
+// servidor y, por detrás, se pide la versión nueva: si cambió algo, la pantalla se actualiza sola.
+// Al registrar o anular algo, la pantalla siguiente espera los datos frescos, y el resto se actualiza en un solo
+// pedido en segundo plano. "Desconectar este dispositivo" borra todo lo guardado.
+
+const LECTURAS = new Set(['inicio', 'clientes.listar', 'abonos.listar', 'ventas.listar', 'cobrar.saldos', 'cobrar.pendientes', 'cobrar.recibos',
+  'cobrar.estadoCuenta', 'proveedores.listar', 'compras.listar', 'pagar.saldos', 'pagar.pendientes', 'pagar.pagos', 'pagar.estadoCuenta',
+  'tesoreria.saldos', 'tesoreria.movimientos', 'tesoreria.paraRetirar', 'informes.rentabilidad', 'informes.conceptos', 'informes.saldos',
+  'informes.retiros', 'config.leer', 'gastos.estado', 'respaldo.estado', 'maestra.estado', 'maestra.apps']);
+const SIN_CAMBIOS = new Set(['clave.estado', 'cobrar.estadoCuentaPdf', 'pagar.estadoCuentaPdf', 'informes.pdf', 'lote']);   // consultas que no se guardan
+const NO_PRECARGAR = new Set(['gastos.estado']);   // consulta la app de gastos: solo cuando se abre Configuración
+const LS_CACHE = 'sg_cache', FRESCO_MS = 20000, MAX_GUARDADOS = 80;
+const CACHE = leerCache(), EN_CURSO = {};
+
+function leerCache() {
+  try { const o = JSON.parse(localStorage.getItem(LS_CACHE) || '{}'); return o.u && o.u === leerLS(LS_URL) && o.e ? o.e : {}; } catch (e) { return {}; }
+}
+let tCache = null;
+function guardarCache() {
+  clearTimeout(tCache);
+  tCache = setTimeout(() => {
+    const ks = Object.keys(CACHE).sort((a, b) => CACHE[b].t - CACHE[a].t);
+    ks.slice(MAX_GUARDADOS).forEach(k => delete CACHE[k]);
+    try { localStorage.setItem(LS_CACHE, JSON.stringify({ u: S.url, e: CACHE })); } catch (e) { try { localStorage.removeItem(LS_CACHE); } catch (x) { /* sin almacenamiento */ } }
+  }, 400);
+}
+function vaciarCache() { Object.keys(CACHE).forEach(k => delete CACHE[k]); try { localStorage.removeItem(LS_CACHE); } catch (e) { /* sin almacenamiento */ } }
+function copia(d) { return d === undefined ? d : JSON.parse(JSON.stringify(d)); }
+function clave(accion, datos) { return accion + '|' + JSON.stringify(datos || {}); }
+
+/** Pide al servidor una consulta (si ya está en camino, espera esa misma) y la guarda. Devuelve si cambió. */
+function pedir(k, accion, datos, opt) {
+  if (EN_CURSO[k]) return EN_CURSO[k];
+  return (EN_CURSO[k] = apiRed(accion, datos, opt).then(d => {
+    const antes = CACHE[k] ? JSON.stringify(CACHE[k].d) : null;
+    CACHE[k] = { t: Date.now(), d: d, a: accion, x: datos || {} };
+    guardarCache();
+    return { d: d, cambio: antes !== JSON.stringify(d) };
+  }).finally(() => { delete EN_CURSO[k]; }));
+}
+
+/** Repinta la pantalla actual con lo guardado (sin volver al principio), si el usuario no está escribiendo. */
+let tRepintar = null;
+function repintar() {
+  clearTimeout(tRepintar);
+  tRepintar = setTimeout(() => {
+    const a = document.activeElement;
+    if (!$('#modal').classList.contains('hidden') || (a && a.closest && a.closest('#main') && /INPUT|SELECT|TEXTAREA/.test(a.tagName))) return;
+    ir(S.vista, S.param, true);
+  }, 150);
+}
+
 async function api(accion, datos, opt) {
+  opt = opt || {};
+  if (!LECTURAS.has(accion) || opt.url || opt.clave !== undefined) {
+    const r = await apiRed(accion, datos, opt);
+    if (!LECTURAS.has(accion) && !SIN_CAMBIOS.has(accion)) despuesDeCambiar();
+    return r;
+  }
+  const k = clave(accion, datos), c = CACHE[k];
+  if (c && !opt.red && !S.forzar) {
+    if (c.sucio || Date.now() - c.t > FRESCO_MS) {
+      const vista = S.vista, param = S.param;
+      pedir(k, accion, datos, { silencioso: true }).then(r => { if (r.cambio && S.vista === vista && S.param === param) repintar(); }).catch(() => { /* se ve lo guardado */ });
+    }
+    return copia(c.d);
+  }
+  return copia((await pedir(k, accion, datos, opt)).d);
+}
+
+/** Después de registrar o anular algo: todo lo guardado queda viejo y la pantalla siguiente espera datos frescos. */
+function despuesDeCambiar() {
+  Object.keys(CACHE).forEach(k => { CACHE[k].sucio = true; });
+  S.forzar = true; S.precargar = true;
+}
+
+/** Actualiza en un solo pedido todas las consultas guardadas que estén viejas. */
+let precargando = false;
+async function precargar() {
+  if (precargando) return;
+  const ks = Object.keys(CACHE).filter(k => !EN_CURSO[k] && !NO_PRECARGAR.has(CACHE[k].a) && (CACHE[k].sucio || Date.now() - CACHE[k].t > FRESCO_MS))
+    .sort((a, b) => CACHE[b].t - CACHE[a].t).slice(0, 40);
+  if (!ks.length) return;
+  precargando = true;
+  try {
+    const r = await apiRed('lote', { pedidos: ks.map(k => ({ accion: CACHE[k].a, datos: CACHE[k].x })) }, { silencioso: true });
+    let cambio = false;
+    ks.forEach((k, i) => {
+      if (!r[i] || !r[i].ok) return;
+      if (JSON.stringify(CACHE[k].d) !== JSON.stringify(r[i].datos)) cambio = true;
+      CACHE[k] = { t: Date.now(), d: r[i].datos, a: CACHE[k].a, x: CACHE[k].x };
+    });
+    guardarCache();
+    if (cambio) repintar();
+  } catch (e) { /* sin conexión: se usa lo guardado */ } finally { precargando = false; }
+}
+
+async function apiRed(accion, datos, opt) {
   opt = opt || {};
   if (!opt.silencioso) cargando(true);
   const ctl = new AbortController();
@@ -206,19 +304,23 @@ function pintarNav() {
     '<button class="nav-btn" data-act="mas" data-v="mas">' + ico('menu') + '<span class="t">Más</span></button>';
 }
 
-async function ir(vista, param) {
+async function ir(vista, param, suave) {
   S.vista = vista; S.param = param === undefined ? null : param;
   const marca = PADRE[vista] || vista;
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.v === marca || (b.dataset.v === 'mas' && NAV_CEL.indexOf(marca) < 0)));
   $('#titulo').textContent = TITULOS[vista];
-  $('#acciones').innerHTML = '';
+  if (!suave) $('#acciones').innerHTML = '';
+  const y = window.scrollY;
   try {
+    await cargarMaestros();   // clientes, proveedores y configuración: al instante desde lo guardado
     await VISTAS[vista](S.param);
+    S.forzar = false;
   } catch (e) {
     if (/Clave incorrecta|no se definió la clave/.test(e.message)) { toast(e.message, 'error'); return mostrarSetup(); }
     $('#main').innerHTML = '<div class="card"><p class="vacio">' + esc(e.message) + '</p><p style="text-align:center">' + boton('recargar', 'Reintentar', 'refresh') + '</p></div>';
   }
-  window.scrollTo(0, 0);
+  window.scrollTo(0, suave ? y : 0);
+  if (S.precargar) { S.precargar = false; setTimeout(precargar, 300); }
 }
 function recargar() { return ir(S.vista, S.param); }
 
@@ -829,7 +931,7 @@ function formComprobante(circ, entidadId) {
       $('#form button[type=submit]').textContent = compra && !nc ? 'Continuar' : 'Emitir';
       if (!nc || !ent.value) return;
       try {
-        const p = await api(C.pre + '.pendientes', { entidad_id: ent.value }, { silencioso: true });
+        const p = await api(C.pre + '.pendientes', { entidad_id: ent.value }, { silencioso: true, red: true });
         $('#f-aplica_a').innerHTML = '<option value="">No aplicar (queda a cuenta)</option>' +
           p.comprobantes.map(x => '<option value="' + x.id + '">' + esc(x.id) + ' – pendiente ' + plata(x.pendiente) + '</option>').join('');
         if (datos && datos.aplica_a) $('#f-aplica_a').value = datos.aplica_a;
@@ -922,7 +1024,7 @@ function formCancelacion(circ, entidadId) {
   }
   async function cargar() {
     extra.innerHTML = '<p class="muted small">Buscando comprobantes pendientes…</p>';
-    try { pend = (await api(C.pre + '.pendientes', { entidad_id: sel.value }, { silencioso: true })).comprobantes; } catch (e) { pend = []; toast(e.message, 'error'); }
+    try { pend = (await api(C.pre + '.pendientes', { entidad_id: sel.value }, { silencioso: true, red: true })).comprobantes; } catch (e) { pend = []; toast(e.message, 'error'); }
     if (!imp.value || imp.dataset.auto) { imp.value = r2(pend.reduce((a, p) => a + p.pendiente, 0)) || ''; imp.dataset.auto = '1'; }
     extra.innerHTML = '<div class="campo"><label>Se aplica a</label>' + (pend.length ? '<div class="imputa">' + pend.map(p =>
       '<span>' + esc(p.id) + ' <span class="muted small">vence ' + fecha(p.vencimiento) + '</span></span><span class="pend num muted">' + plata(p.pendiente) + '</span>' +
@@ -1105,7 +1207,7 @@ const ACT = {
   movAnular: d => formAnular('Anular movimiento', 'tesoreria.anular', d.id),
   retNuevo: async () => {
     if (!optCuentas().length) return toast('Primero creá una cuenta de tesorería en Configuración.', 'error');
-    const cobros = await api('tesoreria.paraRetirar');
+    const cobros = await api('tesoreria.paraRetirar', {}, { red: true });
     abrirForm({ titulo: 'Retiro a tus finanzas', nota: 'Plata que te llevás de la empresa. Si viene de un cobro que ya registraste, elegilo: así figura con ese cliente en "Cobrado vs. retirado".', campos: [
       { n: 'recibo_id', label: '¿De qué cobro?', tipo: 'select', opciones: [['', 'Ninguno: retiro general']].concat(cobros.map(c => [c.id, fecha(c.fecha) + ' – ' + c.cliente + ' – quedan ' + plata(c.disponible)])) },
       { n: 'cuenta_id', label: 'Sale de', tipo: 'select', opciones: optCuentas(), req: true },
@@ -1191,8 +1293,8 @@ const ACT = {
   } }),
   reinstalar: async () => { await api('config.instalar'); toast('Instalación revisada.', 'ok'); recargar(); },
   desconectar: () => abrirForm({ titulo: 'Desconectar este dispositivo', peligro: true, textoOk: 'Desconectar', despues: false,
-    nota: 'Se borran de este dispositivo la dirección del servidor y la clave. Los datos no se tocan.', campos: [],
-    ok: async () => { guardarLS(LS_URL, ''); guardarLS(LS_CLAVE, ''); S.url = S.clave = ''; mostrarSetup(); } })
+    nota: 'Se borran de este dispositivo la dirección del servidor, la clave y los datos guardados para mostrar las pantallas al instante. Los datos de la planilla no se tocan.', campos: [],
+    ok: async () => { guardarLS(LS_URL, ''); guardarLS(LS_CLAVE, ''); vaciarCache(); S.url = S.clave = ''; mostrarSetup(); } })
 };
 
 const CHG = {
@@ -1276,7 +1378,9 @@ function pasoClave() {
 
 async function entrar(clave) {
   S.clave = clave;
-  await cargarMaestros();            // valida la clave contra el servidor
+  S.forzar = true;
+  await cargarMaestros();            // valida la clave contra el servidor (sin usar lo guardado)
+  S.forzar = false;
   guardarLS(LS_URL, S.url); guardarLS(LS_CLAVE, clave);
   iniciarApp(true);
 }
@@ -1290,7 +1394,8 @@ async function iniciarApp(yaCargado) {
     toast(e.message, 'error');
     if (/Clave incorrecta|no se definió la clave/.test(e.message)) return mostrarSetup();
   }
-  ir('inicio');
+  await ir('inicio');
+  setTimeout(precargar, 500);        // actualiza en segundo plano todo lo guardado
 }
 
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => { /* sin modo instalable */ });
