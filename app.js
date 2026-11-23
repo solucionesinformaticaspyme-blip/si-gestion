@@ -5,9 +5,26 @@
 
 // ------------------------------------------------------------ Estado y utilidades
 
-const LS_URL = 'sg_api_url', LS_CLAVE = 'sg_clave';
+const LS_URL = 'sg_api_url', LS_CLAVE = 'sg_clave', LS_PERFILES = 'sg_perfiles';
+
+// Versiones conectadas en este dispositivo (la tuya, la demo…): [{ nombre, url, clave, activo }]
+function leerPerfiles() {
+  let l = [];
+  try { l = JSON.parse(leerLS(LS_PERFILES) || '[]'); } catch (e) { l = []; }
+  if (!l.length && leerLS(LS_URL)) l = [{ nombre: 'Mi versión', url: leerLS(LS_URL), clave: leerLS(LS_CLAVE), activo: true }];   // dispositivos de antes
+  if (l.length && !l.some(p => p.activo)) l[0].activo = true;
+  return l;
+}
+function guardarPerfiles(l) {
+  guardarLS(LS_PERFILES, JSON.stringify(l));
+  const a = l.find(p => p.activo);
+  guardarLS(LS_URL, a ? a.url : ''); guardarLS(LS_CLAVE, a ? a.clave : '');
+}
+const PERFILES = leerPerfiles();
+const ACTIVO = PERFILES.find(p => p.activo) || {};
+
 const S = {
-  url: leerLS(LS_URL), clave: leerLS(LS_CLAVE), vista: 'inicio', param: null,
+  url: ACTIVO.url || '', clave: ACTIVO.clave || '', vista: 'inicio', param: null, modo: 'COMPLETO',
   clientes: [], proveedores: [], conceptos: [], cuentas: [], config: {}, numeradores: [],
   fComp: { VENTA: { mes: mesActual(), entidad_id: '', anulados: false }, COMPRA: { mes: mesActual(), entidad_id: '', anulados: false } },
   fTes: { mes: mesActual(), cuenta_id: '', anulados: false },
@@ -89,10 +106,18 @@ const LECTURAS = new Set(['inicio', 'clientes.listar', 'abonos.listar', 'ventas.
 const SIN_CAMBIOS = new Set(['clave.estado', 'cobrar.estadoCuentaPdf', 'pagar.estadoCuentaPdf', 'informes.pdf', 'lote']);   // consultas que no se guardan
 const NO_PRECARGAR = new Set(['gastos.estado']);   // consulta la app de gastos: solo cuando se abre Configuración
 const LS_CACHE = 'sg_cache', FRESCO_MS = 20000, MAX_GUARDADOS = 80;
-const CACHE = leerCache(), EN_CURSO = {};
+const CACHE = {}, EN_CURSO = {};
+cambiarCache(ACTIVO.url);
 
-function leerCache() {
-  try { const o = JSON.parse(localStorage.getItem(LS_CACHE) || '{}'); return o.u && o.u === leerLS(LS_URL) && o.e ? o.e : {}; } catch (e) { return {}; }
+/** Cada versión guarda lo suyo aparte: al cambiar de versión nunca se mezclan los datos. */
+function claveCache(url) { let h = 0; for (const ch of String(url || '')) h = (h * 31 + ch.charCodeAt(0)) | 0; return LS_CACHE + '_' + (h >>> 0).toString(36); }
+function cambiarCache(url) {
+  Object.keys(CACHE).forEach(k => delete CACHE[k]);
+  try {
+    localStorage.removeItem(LS_CACHE);   // formato anterior, de una sola versión
+    const o = JSON.parse(localStorage.getItem(claveCache(url)) || '{}');
+    if (o.u === url && o.e) Object.assign(CACHE, o.e);
+  } catch (e) { /* sin almacenamiento */ }
 }
 let tCache = null;
 function guardarCache() {
@@ -100,10 +125,10 @@ function guardarCache() {
   tCache = setTimeout(() => {
     const ks = Object.keys(CACHE).sort((a, b) => CACHE[b].t - CACHE[a].t);
     ks.slice(MAX_GUARDADOS).forEach(k => delete CACHE[k]);
-    try { localStorage.setItem(LS_CACHE, JSON.stringify({ u: S.url, e: CACHE })); } catch (e) { try { localStorage.removeItem(LS_CACHE); } catch (x) { /* sin almacenamiento */ } }
+    try { localStorage.setItem(claveCache(S.url), JSON.stringify({ u: S.url, e: CACHE })); } catch (e) { try { localStorage.removeItem(claveCache(S.url)); } catch (x) { /* sin almacenamiento */ } }
   }, 400);
 }
-function vaciarCache() { Object.keys(CACHE).forEach(k => delete CACHE[k]); try { localStorage.removeItem(LS_CACHE); } catch (e) { /* sin almacenamiento */ } }
+function vaciarCache() { Object.keys(CACHE).forEach(k => delete CACHE[k]); try { localStorage.removeItem(claveCache(S.url)); } catch (e) { /* sin almacenamiento */ } }
 function copia(d) { return d === undefined ? d : JSON.parse(JSON.stringify(d)); }
 function clave(accion, datos) { return accion + '|' + JSON.stringify(datos || {}); }
 
@@ -231,7 +256,7 @@ function campoHtml(c) {
   const req = c.req ? ' required' : '';
   let ctl;
   if (c.tipo === 'check') {
-    return '<div class="campo" id="c-' + c.n + '"><label class="check-linea"><input type="checkbox" id="' + id + '"' + (c.valor ? ' checked' : '') + '> ' + c.label + '</label>' + (c.ayuda ? '<small>' + c.ayuda + '</small>' : '') + '</div>';
+    return '<div class="campo" id="c-' + c.n + '"' + (c.oculto ? ' style="display:none"' : '') + '><label class="check-linea"><input type="checkbox" id="' + id + '"' + (c.valor ? ' checked' : '') + '> ' + c.label + '</label>' + (c.ayuda ? '<small>' + c.ayuda + '</small>' : '') + '</div>';
   }
   if (c.tipo === 'select') {
     ctl = '<select id="' + id + '"' + req + '>' + (c.opciones || []).map(o => '<option value="' + esc(o[0]) + '"' + (String(o[0]) === String(v) ? ' selected' : '') + '>' + esc(o[1]) + '</option>').join('') + '</select>';
@@ -328,7 +353,33 @@ async function cargarMaestros() {
   const r = await Promise.all([api('config.leer'), api('clientes.listar'), api('proveedores.listar')]);
   S.config = r[0].config; S.conceptos = r[0].conceptos; S.cuentas = r[0].cuentas; S.numeradores = r[0].numeradores;
   S.clientes = r[1]; S.proveedores = r[2];
-  $('#empresa').textContent = S.config.empresa || 'Sipymes';
+  S.modo = r[0].modo || 'COMPLETO'; S.version = r[0].version || '';
+  $('#empresa').textContent = (S.config.empresa || 'Si-Gestión') + (PERFILES.length > 1 ? ' ▾' : '');
+  document.body.classList.toggle('modo-demo', S.modo === 'DEMO');
+  const b = $('#banda-demo');
+  if (b) b.classList.toggle('hidden', S.modo !== 'DEMO');
+  const a = PERFILES.find(p => p.activo);
+  if (a && a.url === S.url && S.config.empresa && a.nombre !== S.config.empresa) { a.nombre = S.config.empresa; guardarPerfiles(PERFILES); }
+}
+
+/** Cambiar a otra versión conectada en este dispositivo. */
+async function usarPerfil(i) {
+  PERFILES.forEach((p, j) => { p.activo = j === i; });
+  guardarPerfiles(PERFILES);
+  S.url = PERFILES[i].url; S.clave = PERFILES[i].clave;
+  cambiarCache(S.url);
+  cerrarModal();
+  try { await cargarMaestros(); } catch (e) { toast(e.message, 'error'); if (/Clave incorrecta/.test(e.message)) return pasoClave(); }
+  await ir('inicio');
+  setTimeout(precargar, 500);
+}
+
+function elegirPerfil() {
+  if (PERFILES.length < 2) return;
+  abrirModal('<h2>¿Qué versión querés usar?</h2><div class="eleccion">' +
+    PERFILES.map((p, i) => '<button type="button" class="opcion" data-act="perfilUsar" data-i="' + i + '">' + ico(p.activo ? 'radio_button_checked' : 'radio_button_unchecked') +
+      '<b>' + esc(p.nombre || 'Versión ' + (i + 1)) + '</b><span>' + (p.activo ? 'En uso' : 'Tocá para cambiar') + '</span></button>').join('') +
+    '</div><div class="modal-pie"><button type="button" class="btn" data-act="cerrar">Cerrar</button></div>');
 }
 
 // ------------------------------------------------------------ Vistas
@@ -348,7 +399,7 @@ VISTAS.inicio = async function () {
     kpi('shopping_cart', 'Gastos del mes', plata(d.gastos_mes)) +
     kpi('payments', 'Cobrado en el mes', plata(d.cobrado_mes)) +
     kpi('outbox', 'Pagado en el mes', plata(d.pagado_mes)) +
-    (d.sin_retirar === undefined ? '' : kpi('savings', 'Sin retirar (acumulado)', plata(d.sin_retirar))) +
+    (d.sin_retirar === undefined || (d.modo && d.modo !== 'COMPLETO') ? '' : kpi('savings', 'Sin retirar (acumulado)', plata(d.sin_retirar))) +
     '</div><div class="dos">' +
     '<section class="card"><h2>Clientes sin cobro pasada la fecha límite <span class="chip ' + (d.avisos.length ? 'rojo' : 'verde') + '">' + d.avisos.length + '</span></h2>' +
     (d.avisos.length ? tabla([{ t: 'Cliente' }, { t: 'Venció', c: 'hm' }, { t: 'Días', c: 'num' }, { t: 'Pendiente', c: 'num' }, { t: '' }],
@@ -796,7 +847,7 @@ VISTAS.config = async function () {
     campoHtml({ n: 'empresa', label: 'Nombre de la empresa', valor: g.empresa }) +
     campoHtml({ n: 'dia_limite_default', label: 'Día límite de cobro general', tipo: 'number', step: 1, min: 1, max: 31, valor: g.dia_limite_default, ayuda: 'Se usa para los clientes que no tienen un día propio.' }) +
     campoHtml({ n: 'email_avisos', label: 'Mail para avisos', tipo: 'email', valor: g.email_avisos, ayuda: 'Vacío: se usa el mail de la cuenta dueña del servidor.' }) +
-    campoHtml({ n: 'maestra_id', label: 'Planilla MAESTRA (ID)', valor: g.maestra_id, ayuda: 'El código largo que aparece en la dirección de la planilla, entre /d/ y /edit.' }) +
+    (S.modo === 'COMPLETO' ? campoHtml({ n: 'maestra_id', label: 'Planilla MAESTRA (ID)', valor: g.maestra_id, ayuda: 'El código largo que aparece en la dirección de la planilla, entre /d/ y /edit.' }) : '') +
     '<div class="modal-pie">' + boton('cfgGuardar', 'Guardar', 'save', '', 'btn-primary') + '</div></form></section>' +
     '<section class="card"><h2>Numeración</h2>' + tabla([{ t: 'Tipo' }, { t: 'Último número', c: 'num' }], S.numeradores.map(n => ({ c: [esc(n.tipo), n.ultimo] }))) +
     '<p class="muted small" style="margin-top:10px">La asigna el sistema: correlativa, sin repetir ni saltear.</p></section></div>' +
@@ -807,22 +858,46 @@ VISTAS.config = async function () {
     '<section class="card"><h2>Cuentas de tesorería ' + boton('ctaNueva', 'Nueva', 'add', '', 'btn-sm') + '</h2>' +
     tabla([{ t: 'Cuenta' }, { t: 'Tipo' }, { t: '' }], S.cuentas.map(c => ({ c: [esc(c.nombre) + (c.activo === 'NO' ? ' <span class="chip">Inactiva</span>' : ''), '<span class="chip">' + esc(c.tipo) + '</span>',
       icoBtn('ctaEditar', 'edit', 'Editar', ' data-id="' + c.id + '"')] }))) + '</section></div>' +
-    '<section class="card"><h2>Planilla MAESTRA ' + boton('maestraSync', 'Actualizar ahora', 'sync', '', 'btn-sm') + '</h2><div id="maestra-cfg"><p class="muted small">Consultando…</p></div></section>' +
-    '<section class="card"><h2>Copia de seguridad ' + boton('respaldoHacer', 'Hacer una copia ahora', 'backup', '', 'btn-sm') + '</h2><div id="respaldo-cfg"><p class="muted small">Consultando…</p></div></section>' +
-    '<section class="card"><h2>App de gastos</h2><div id="gastos-cfg"><p class="muted small">Consultando tu app de gastos…</p></div></section>' +
+    (S.modo === 'DEMO' ? '<section class="card"><h2>Datos de demostración ' + boton('demoReiniciar', 'Reiniciar datos de demo', 'restart_alt', '', 'btn-sm') + '</h2>' +
+      '<p class="small">Esta es la versión de demostración: los datos son inventados y no tienen nada que ver con tu versión. Antes de mostrarla, reiniciala para que las fechas queden al día.</p></section>' : '') +
+    (S.modo === 'COMPLETO' ? '<section class="card"><h2>Copia para un cliente ' + boton('plantillaPreparar', 'Preparar copia para un cliente', 'content_copy', '', 'btn-sm') + '</h2><div id="plantilla-cfg"><p class="muted small">Consultando…</p></div></section>' +
+      '<section class="card"><h2>Planilla MAESTRA ' + boton('maestraSync', 'Actualizar ahora', 'sync', '', 'btn-sm') + '</h2><div id="maestra-cfg"><p class="muted small">Consultando…</p></div></section>' : '') +
+    (S.modo !== 'DEMO' ? '<section class="card"><h2>Copia de seguridad ' + boton('respaldoHacer', 'Hacer una copia ahora', 'backup', '', 'btn-sm') + '</h2><div id="respaldo-cfg"><p class="muted small">Consultando…</p></div></section>' : '') +
+    (S.modo === 'COMPLETO' ? '<section class="card"><h2>App de gastos</h2><div id="gastos-cfg"><p class="muted small">Consultando tu app de gastos…</p></div></section>' : '') +
+    '<section class="card"><h2>Versiones en este dispositivo ' + boton('perfilAgregar', 'Conectar otra versión', 'add', '', 'btn-sm') + '</h2>' +
+    tabla([{ t: 'Versión' }, { t: '' }], PERFILES.map((p, i) => ({ c: [esc(p.nombre || 'Versión ' + (i + 1)) + (p.activo ? ' <span class="chip verde">En uso</span>' : ''),
+      p.activo ? '' : boton('perfilUsar', 'Usar', 'swap_horiz', ' data-i="' + i + '"', 'btn-sm')] }))) +
+    '<p class="muted small" style="margin-top:10px">Por ejemplo, tu versión y la demo. Cada una tiene su propia dirección y clave, y sus datos no se mezclan. También podés cambiar tocando el nombre arriba a la izquierda.' +
+    (S.version ? ' Versión del sistema: ' + esc(S.version) + '.' : '') + '</p></section>' +
     '<section class="card"><h2>Acceso y mantenimiento</h2><div class="acciones">' + boton('claveCambiar', 'Cambiar clave', 'key') +
     boton('reinstalar', 'Revisar instalación', 'build') + boton('desconectar', 'Desconectar este dispositivo', 'logout') + '</div>' +
     '<p class="muted small" style="margin-top:10px">"Revisar instalación" vuelve a crear las hojas que falten y reprograma la tarea diaria (abonos del día 1 y avisos). No borra datos.</p></section>';
-  api('maestra.apps', {}, { silencioso: true }).then(a => { S.apps = a; }).catch(() => {});
-  api('maestra.estado', {}, { silencioso: true }).then(pintarMaestra).catch(() => {});
-  api('respaldo.estado', {}, { silencioso: true }).then(r => {
+  if (S.modo === 'COMPLETO') {
+    api('maestra.apps', {}, { silencioso: true }).then(a => { S.apps = a; }).catch(() => {});
+    api('maestra.estado', {}, { silencioso: true }).then(pintarMaestra).catch(() => {});
+    api('plantilla.estado', {}, { silencioso: true }).then(pintarPlantilla).catch(() => {});
+  }
+  if (S.modo !== 'DEMO') api('respaldo.estado', {}, { silencioso: true }).then(r => {
     const el = $('#respaldo-cfg'); if (!el) return;
     el.innerHTML = '<p class="small">' + (r.ultimo ? 'Última copia: <b>' + esc(fecha(r.ultimo.slice(0, 10)) + ' ' + r.ultimo.slice(11)) + '</b>' + (r.carpeta_url ? ' · <a href="' + esc(r.carpeta_url) + '" target="_blank" rel="noopener">Ver carpeta</a>' : '') : 'Todavía no se hizo ninguna copia.') + '</p>' +
       (r.error ? '<p class="neg small">' + esc(r.error) + '</p>' : '') +
       '<p class="muted small" style="margin-top:8px">Una vez por semana se copia la planilla de datos a la carpeta "Si-Gestión - Respaldos" de tu Drive. Se guardan las ' + r.guardar + ' copias más nuevas; las anteriores van a la papelera de Drive.</p>';
   }).catch(() => {});
-  api('gastos.estado', {}, { silencioso: true }).then(pintarGastos).catch(e => { const el = $('#gastos-cfg'); if (el) el.innerHTML = '<p class="neg small">' + esc(e.message) + '</p>'; });
+  if (S.modo === 'COMPLETO') api('gastos.estado', {}, { silencioso: true }).then(pintarGastos).catch(e => { const el = $('#gastos-cfg'); if (el) el.innerHTML = '<p class="neg small">' + esc(e.message) + '</p>'; });
 };
+
+/** Tarjeta "Copia para un cliente" de Configuración. */
+function pintarPlantilla(p) {
+  const el = $('#plantilla-cfg'); if (!el) return;
+  el.innerHTML = (p.id
+    ? '<p class="small">Planilla modelo vacía, versión <b>' + esc(p.version) + '</b>' + (p.version !== p.version_actual ? ' <span class="chip ambar">Hay una versión más nueva: preparala de nuevo</span>' : '') +
+      ' · <a href="' + esc(p.url) + '" target="_blank" rel="noopener">Abrirla</a></p>' +
+      '<div class="campo" style="margin-top:10px"><label for="pl-link">Link para el cliente</label><input id="pl-link" type="text" readonly value="' + esc(p.copia_url) + '"></div>' +
+      '<div class="acciones">' + boton('plantillaCopiar', 'Copiar link', 'link', '', 'btn-sm') + '</div>'
+    : '<p class="small">Todavía no preparaste la planilla modelo.</p>') +
+    '<p class="muted small" style="margin-top:8px">Arma en tu Drive una planilla vacía con la estructura de la última versión. No lleva ningún dato tuyo ni de la demo. ' +
+    'El cliente abre el link con su cuenta de Google y le queda una copia propia. El servidor dentro de la copia se suma en el bloque 3.</p>';
+}
 
 /** Tarjeta "Planilla MAESTRA" de Configuración. */
 function pintarMaestra(m) {
@@ -1051,7 +1126,7 @@ function cartelRetiro(v) {
       try {
         const r = await api('cobrar.recibo', Object.assign({}, v, retiro ? { retiro: retiro } : {}));
         let t = 'Recibo ' + r.id + ' emitido' + (r.a_cuenta > 0 ? '. Quedan ' + plata(r.a_cuenta) + ' a cuenta' : '');
-        if (r.retiro) t += '. Retiro de ' + plata(r.retiro.importe) + (r.retiro.gastos_estado === 'ENVIADO' ? ' enviado a tu app de gastos.' : ' registrado; queda pendiente de pasar a tu app de gastos.');
+        if (r.retiro) t += '. Retiro de ' + plata(r.retiro.importe) + (S.modo !== 'COMPLETO' ? ' registrado.' : r.retiro.gastos_estado === 'ENVIADO' ? ' enviado a tu app de gastos.' : ' registrado; queda pendiente de pasar a tu app de gastos.');
         else t += '.';
         toast(t, 'ok');
         resolve();
@@ -1060,8 +1135,8 @@ function cartelRetiro(v) {
     function preguntar() {
       abrirModal('<h2>¿Te llevás esta plata a tus finanzas?</h2>' + resumen +
         '<div class="eleccion">' +
-        '<button type="button" class="opcion" id="rt-si">' + ico('savings') + '<b>Sí, me la llevo</b><span>Toda o una parte. Se registra el retiro y pasa a tu app de gastos como "' + esc(cli) + ' - Honorarios ' + v.fecha.slice(5, 7) + '/' + v.fecha.slice(0, 4) + '".</span></button>' +
-        '<button type="button" class="opcion" id="rt-no">' + ico('account_balance') + '<b>No, queda en Sipymes</b><span>Solo se registra el cobro.</span></button></div>' +
+        '<button type="button" class="opcion" id="rt-si">' + ico('savings') + '<b>Sí, me la llevo</b><span>Toda o una parte. Se registra el retiro' + (S.modo === 'COMPLETO' ? ' y pasa a tu app de gastos como "' + esc(cli) + ' - Honorarios ' + v.fecha.slice(5, 7) + '/' + v.fecha.slice(0, 4) + '"' : '') + '.</span></button>' +
+        '<button type="button" class="opcion" id="rt-no">' + ico('account_balance') + '<b>No, queda en ' + esc(S.config.empresa || 'la empresa') + '</b><span>Solo se registra el cobro.</span></button></div>' +
         '<div class="modal-pie"><button type="button" class="btn" id="rt-cancelar">Cancelar</button></div>');
       $('#rt-si').onclick = monto;
       $('#rt-no').onclick = () => emitir(null);
@@ -1072,7 +1147,7 @@ function cartelRetiro(v) {
         '<div class="campo"><label for="rt-total">Total cobrado</label><input id="rt-total" type="text" value="' + plata(v.importe) + '" disabled></div>' +
         '<label class="check-linea"><input type="checkbox" id="rt-todo"> Retirar todo</label>' +
         '<div class="campo"><label for="rt-importe">Importe que te llevás</label><input id="rt-importe" type="number" step="0.01" min="0.01" max="' + v.importe + '" inputmode="decimal" required autocomplete="off">' +
-        '<small>Es lo que pasa a tu app de gastos. Lo que no retirás queda en la cuenta de Sipymes.</small></div>' +
+        '<small>' + (S.modo === 'COMPLETO' ? 'Es lo que pasa a tu app de gastos. ' : '') + 'Lo que no retirás queda en la cuenta de ' + esc(S.config.empresa || 'la empresa') + '.</small></div>' +
         campoHtml({ n: 'fecha', label: 'Fecha del retiro', tipo: 'date', valor: v.fecha, req: true }) +
         '<div class="modal-pie"><button type="button" class="btn" id="rt-volver">' + ico('arrow_back') + 'Volver</button><button type="submit" class="btn btn-primary">Registrar cobro y retiro</button></div></form>');
       const todo = $('#rt-todo'), imp = $('#rt-importe');
@@ -1100,6 +1175,7 @@ const ESTADO_GASTOS = {
   BORRADO: ['', 'Borrado de app de gastos'], NO_ENVIADO: ['', 'No enviado'], NO_ENVIAR: ['', 'No se envía'], BORRAR_ERROR: ['rojo', 'Falta borrar en app de gastos']
 };
 function chipGastos(m) {
+  if (S.modo !== 'COMPLETO') return '';
   const e = ESTADO_GASTOS[m.gastos_estado];
   return e ? ' <span class="chip ' + e[0] + '"' + (m.gastos_error ? ' title="' + esc(m.gastos_error) + '"' : '') + '>' + e[1] + '</span>' : '';
 }
@@ -1214,7 +1290,7 @@ const ACT = {
       { n: 'fecha', label: 'Fecha', tipo: 'date', valor: hoy(), req: true },
       { n: 'importe', label: 'Importe', tipo: 'number', min: 0.01, req: true },
       { n: 'detalle', label: 'Detalle', valor: 'Retiro personal', req: true },
-      { n: 'no_enviar', label: 'Ya lo cargué en mi app de gastos (no enviarlo)', tipo: 'check' }],
+      { n: 'no_enviar', label: 'Ya lo cargué en mi app de gastos (no enviarlo)', tipo: 'check', oculto: S.modo !== 'COMPLETO' }],
     textoOk: 'Registrar retiro',
     ok: async v => {
       const m = await api('tesoreria.retiro', v);
@@ -1275,7 +1351,8 @@ const ACT = {
     recargar();
   },
   cfgGuardar: async () => {
-    const v = { empresa: $('#f-empresa').value.trim(), dia_limite_default: $('#f-dia_limite_default').value.trim(), email_avisos: $('#f-email_avisos').value.trim(), maestra_id: $('#f-maestra_id').value.trim() };
+    const v = { empresa: $('#f-empresa').value.trim(), dia_limite_default: $('#f-dia_limite_default').value.trim(), email_avisos: $('#f-email_avisos').value.trim() };
+    if ($('#f-maestra_id')) v.maestra_id = $('#f-maestra_id').value.trim();
     if (!$('#cfg').reportValidity()) return;
     await api('config.guardar', v); toast('Configuración guardada.', 'ok'); recargar();
   },
@@ -1292,9 +1369,27 @@ const ACT = {
     toast('Clave cambiada. En tus otros dispositivos vas a tener que ingresarla de nuevo.', 'ok');
   } }),
   reinstalar: async () => { await api('config.instalar'); toast('Instalación revisada.', 'ok'); recargar(); },
-  desconectar: () => abrirForm({ titulo: 'Desconectar este dispositivo', peligro: true, textoOk: 'Desconectar', despues: false,
-    nota: 'Se borran de este dispositivo la dirección del servidor, la clave y los datos guardados para mostrar las pantallas al instante. Los datos de la planilla no se tocan.', campos: [],
-    ok: async () => { guardarLS(LS_URL, ''); guardarLS(LS_CLAVE, ''); vaciarCache(); S.url = S.clave = ''; mostrarSetup(); } })
+  perfilUsar: d => usarPerfil(Number(d.i)),
+  perfilAgregar: () => { cerrarModal(); $('#app').classList.add('hidden'); $('#setup').classList.remove('hidden'); S.url = ''; pasoUrl(); },
+  elegirPerfil: () => elegirPerfil(),
+  demoReiniciar: () => abrirForm({ titulo: 'Reiniciar los datos de demostración', peligro: true, textoOk: 'Reiniciar',
+    nota: 'Se borran todos los datos de esta versión de demostración y se carga de nuevo el negocio inventado, con fechas de los últimos meses. Solo funciona en la demo.',
+    campos: [{ n: 'confirmar', label: 'Escribí BORRAR para confirmar', req: true }],
+    ok: async v => { const r = await api('demo.reiniciar', v); toast('Demo lista: ' + r.clientes + ' clientes, ' + r.comprobantes + ' comprobantes.', 'ok'); } }),
+  plantillaPreparar: async () => { await api('plantilla.preparar'); toast('Planilla modelo lista.', 'ok'); pintarPlantilla(await api('plantilla.estado', {}, { red: true })); },
+  plantillaCopiar: async () => {
+    const t = $('#pl-link').value;
+    try { await navigator.clipboard.writeText(t); toast('Link copiado.', 'ok'); } catch (e) { $('#pl-link').select(); toast('Seleccioná el link y copialo.', 'info'); }
+  },
+  desconectar: () => abrirForm({ titulo: 'Desconectar esta versión de este dispositivo', peligro: true, textoOk: 'Desconectar', despues: false,
+    nota: 'Se borran de este dispositivo la dirección del servidor, la clave y los datos guardados de esta versión. Las otras versiones conectadas siguen. Los datos de la planilla no se tocan.', campos: [],
+    ok: async () => {
+      vaciarCache();
+      const i = PERFILES.findIndex(p => p.activo);
+      if (i >= 0) PERFILES.splice(i, 1);
+      if (PERFILES.length) { PERFILES[0].activo = true; guardarPerfiles(PERFILES); return usarPerfil(0); }
+      guardarPerfiles(PERFILES); S.url = S.clave = ''; mostrarSetup();
+    } })
 };
 
 const CHG = {
@@ -1358,6 +1453,7 @@ function pasoUrl() {
     ph: 'https://script.google.com/macros/s/.../exec', ayuda: 'Es la URL que termina en /exec, la que copiaste al implementar la aplicación web.' }], 'Continuar', async v => {
     const e = await api('clave.estado', {}, { url: v.url, clave: '' });
     S.url = v.url;
+    cambiarCache(S.url);
     if (e.definida) pasoClave(); else pasoDefinir();
   });
 }
@@ -1381,7 +1477,11 @@ async function entrar(clave) {
   S.forzar = true;
   await cargarMaestros();            // valida la clave contra el servidor (sin usar lo guardado)
   S.forzar = false;
-  guardarLS(LS_URL, S.url); guardarLS(LS_CLAVE, clave);
+  let p = PERFILES.find(x => x.url === S.url);
+  if (!p) { p = { nombre: S.config.empresa || 'Versión ' + (PERFILES.length + 1), url: S.url }; PERFILES.push(p); }
+  p.clave = clave; p.nombre = S.config.empresa || p.nombre;
+  PERFILES.forEach(x => { x.activo = x === p; });
+  guardarPerfiles(PERFILES);
   iniciarApp(true);
 }
 

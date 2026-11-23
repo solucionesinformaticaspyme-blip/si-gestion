@@ -218,3 +218,7 @@ input:disabled { color: var(--text-secondary); background: var(--border-light); 
   .imputa .pend { display: none; }
 }
 @media (max-width: 420px) { .kpi-grid { grid-template-columns: 1fr; } }
+
+/* Versiones: la demo se distingue a simple vista */
+.banda-demo { background: var(--accent-soft); color: var(--ink-detail); border: 1px solid var(--accent-mid); border-radius: 10px; padding: 8px 14px; margin: 0 0 14px; font-size: 13px; font-weight: 700; text-align: center; }
+.brand[data-act] { cursor: pointer; }
