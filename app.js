@@ -157,9 +157,15 @@ function repintar() {
 async function api(accion, datos, opt) {
   opt = opt || {};
   if (!LECTURAS.has(accion) || opt.url || opt.clave !== undefined) {
-    const r = await apiRed(accion, datos, opt);
-    if (!LECTURAS.has(accion) && !SIN_CAMBIOS.has(accion)) despuesDeCambiar();
-    return r;
+    const escribe = !LECTURAS.has(accion) && !SIN_CAMBIOS.has(accion);
+    try {
+      const r = await apiRed(accion, datos, opt);
+      if (escribe) despuesDeCambiar();
+      return r;
+    } catch (e) {
+      if (escribe) despuesDeCambiar();   // aunque no llegue la respuesta, el servidor pudo haberlo hecho: no mostrar datos viejos
+      throw e;
+    }
   }
   const k = clave(accion, datos), c = CACHE[k];
   if (c && !opt.red && !S.forzar) {
@@ -203,7 +209,7 @@ async function apiRed(accion, datos, opt) {
   opt = opt || {};
   if (!opt.silencioso) cargando(true);
   const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), 45000);
+  const t = setTimeout(() => ctl.abort(), opt.espera || 45000);
   try {
     const r = await fetch(opt.url || S.url, {
       method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },   // text/plain evita el preflight con Apps Script
@@ -1373,9 +1379,9 @@ const ACT = {
   perfilAgregar: () => { cerrarModal(); $('#app').classList.add('hidden'); $('#setup').classList.remove('hidden'); S.url = ''; pasoUrl(); },
   elegirPerfil: () => elegirPerfil(),
   demoReiniciar: () => abrirForm({ titulo: 'Reiniciar los datos de demostración', peligro: true, textoOk: 'Reiniciar',
-    nota: 'Se borran todos los datos de esta versión de demostración y se carga de nuevo el negocio inventado, con fechas de los últimos meses. Solo funciona en la demo.',
+    nota: 'Se borran todos los datos de esta versión de demostración y se carga de nuevo el negocio inventado, con fechas de los últimos meses. Tarda unos segundos. Solo funciona en la demo.',
     campos: [{ n: 'confirmar', label: 'Escribí BORRAR para confirmar', req: true }],
-    ok: async v => { const r = await api('demo.reiniciar', v); toast('Demo lista: ' + r.clientes + ' clientes, ' + r.comprobantes + ' comprobantes.', 'ok'); } }),
+    ok: async v => { const r = await api('demo.reiniciar', v, { espera: 300000 }); toast('Demo lista: ' + r.clientes + ' clientes, ' + r.comprobantes + ' comprobantes.', 'ok'); } }),
   plantillaPreparar: async () => { await api('plantilla.preparar'); toast('Planilla modelo lista.', 'ok'); pintarPlantilla(await api('plantilla.estado', {}, { red: true })); },
   plantillaCopiar: async () => {
     const t = $('#pl-link').value;
