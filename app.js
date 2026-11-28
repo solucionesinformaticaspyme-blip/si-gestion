@@ -75,7 +75,7 @@ function nomMes(m) { return MESES[Number(m.slice(5, 7)) - 1] + '-' + m.slice(2, 
 const fmt = new Intl.NumberFormat('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 function plata(n) { n = Number(n) || 0; return (n < 0 ? '-' : '') + '$ ' + fmt.format(Math.abs(n)); }
 function pct(v) { return v === null || v === undefined ? '—' : String(v).replace('.', ',') + ' %'; }
-function r2(n) { return Math.round((Number(n) + Number.EPSILON) * 100) / 100; }
+function r2(n) { return Math.round(((Number(n) || 0) + Number.EPSILON) * 100) / 100; }
 function ico(n) { return '<span class="material-symbols-rounded">' + n + '</span>'; }
 function entidad(circ, id) { return CIR[circ].ents().find(c => c.id === id) || { id: id, nombre: '(sin nombre)' }; }
 function activos(l) { return l.filter(x => x.activo !== 'NO'); }
@@ -105,7 +105,7 @@ function toast(msg, tipo) {
 const LECTURAS = new Set(['inicio', 'clientes.listar', 'abonos.listar', 'ventas.listar', 'cobrar.saldos', 'cobrar.pendientes', 'cobrar.recibos',
   'cobrar.estadoCuenta', 'proveedores.listar', 'compras.listar', 'pagar.saldos', 'pagar.pendientes', 'pagar.pagos', 'pagar.estadoCuenta',
   'tesoreria.saldos', 'tesoreria.movimientos', 'tesoreria.paraRetirar', 'informes.rentabilidad', 'informes.conceptos', 'informes.saldos',
-  'informes.retiros', 'config.leer', 'gastos.estado', 'respaldo.estado', 'maestra.estado', 'maestra.apps']);
+  'informes.retiros', 'informes.iva', 'config.leer', 'gastos.estado', 'respaldo.estado', 'maestra.estado', 'maestra.apps']);
 const SIN_CAMBIOS = new Set(['clave.estado', 'usuarios.yo', 'acceso.salir', 'acceso.estado', 'acceso.entrar', 'acceso.recuperar', 'acceso.restablecer', 'acceso.crearPrincipal', 'cobrar.estadoCuentaPdf', 'pagar.estadoCuentaPdf', 'informes.pdf', 'lote']);   // consultas que no se guardan
 const NO_PRECARGAR = new Set(['gastos.estado']);   // consulta la app de gastos: solo cuando se abre Configuración
 const LS_CACHE = 'sg_cache2', FRESCO_MS = 20000, MAX_GUARDADOS = 80;   // "2": descarta lo guardado por versiones anteriores de la app
@@ -670,17 +670,19 @@ VISTAS.tesoreria = async function () {
 
 // ---------- Informes
 
-const INFORMES = [['rentabilidad', 'Rentabilidad por mes'], ['ventas', 'Ventas por concepto'], ['gastos', 'Gastos por concepto'], ['saldos', 'Saldos'], ['retiros', 'Cobrado vs. retirado']];
+const INFORMES = [['rentabilidad', 'Rentabilidad por mes'], ['ventas', 'Ventas por concepto'], ['gastos', 'Gastos por concepto'], ['saldos', 'Saldos'], ['retiros', 'Cobrado vs. retirado'], ['iva', 'Posición de IVA']];
 const COLOR_ING = '#14737C', COLOR_GAS = '#FF914D';   // colores Sipymes; validados para daltonismo (ΔE 20,9). El naranja tiene poco contraste: por eso hay tabla y detalle al pasar el mouse
 
 VISTAS.informes = async function () {
   const I = S.inf;
   S.infDatos = null;
   $('#acciones').innerHTML = boton('infExcel', 'Excel', 'table_view') + boton('infPdf', 'PDF', 'picture_as_pdf', '', 'btn-primary');
-  const seg = '<div class="seg">' + INFORMES.map(t => '<button class="' + (t[0] === I.tipo ? 'on' : '') + '" data-act="infTipo" data-v="' + t[0] + '">' + t[1] + '</button>').join('') + '</div>';
+  if (I.tipo === 'iva' && !esRI()) I.tipo = 'rentabilidad';
+  const seg = '<div class="seg">' + INFORMES.filter(t => t[0] !== 'iva' || esRI()).map(t => '<button class="' + (t[0] === I.tipo ? 'on' : '') + '" data-act="infTipo" data-v="' + t[0] + '">' + t[1] + '</button>').join('') + '</div>';
   const todo = I.tipo === 'retiros' && I.todo;
   const filtros = I.tipo === 'saldos'
     ? '<div class="campo"><label for="fi-fecha">Saldos al</label><input id="fi-fecha" type="date" value="' + I.fecha + '" data-chg="infFiltro"></div>'
+    : I.tipo === 'iva' ? '<div class="campo"><label for="fi-mes">Mes</label><input id="fi-mes" type="month" value="' + (I.mes || mesActual()) + '" data-chg="infFiltro"></div>'
     : '<div class="campo"><label for="fi-desde">Desde</label><input id="fi-desde" type="month" value="' + I.desde + '" data-chg="infFiltro"' + (todo ? ' disabled' : '') + '></div>' +
       '<div class="campo"><label for="fi-hasta">Hasta</label><input id="fi-hasta" type="month" value="' + I.hasta + '" data-chg="infFiltro"' + (todo ? ' disabled' : '') + '></div>' +
       (I.tipo === 'retiros' ? '<div class="seg rango">' + [['mes', 'Este mes'], ['anio', 'Este año'], ['todo', 'Desde el inicio']].map(x =>
@@ -703,6 +705,19 @@ VISTAS.informes = async function () {
       tabla([{ t: 'Concepto' }, { t: 'Rubro', c: 'hm' }].concat(r.meses.map(m => ({ t: nomMes(m), c: 'num' }))).concat([{ t: 'Total', c: 'num' }]),
         r.filas.map(f => ({ c: ['<b>' + esc(f.concepto) + '</b>', esc(f.rubro)].concat(f.valores.map(v => v ? plata(v) : '<span class="muted">—</span>')).concat(['<b>' + plata(f.total) + '</b>']) })),
         ['Total', ''].concat(r.totales.map(plata)).concat([plata(r.total)])) + '</section>';
+  } else if (I.tipo === 'iva') {
+    const r = await api('informes.iva', { mes: I.mes || mesActual() });
+    S.infDatos = r;
+    const lado = (titulo, l) => '<section class="card"><h2>' + titulo + '</h2>' + (l.por.length
+      ? tabla([{ t: 'Alícuota' }, { t: 'Neto gravado', c: 'num' }, { t: 'IVA', c: 'num' }], l.por.map(a => ({ c: [String(a.tasa).replace('.', ',') + ' %', plata(a.neto), plata(a.iva)] })),
+        ['Total', plata(l.neto), plata(l.iva)])
+      : '<p class="vacio">Sin comprobantes con IVA discriminado.</p>') +
+      '<p class="muted small" style="margin-top:8px">' + l.cantidad + ' comprobantes con IVA' + (l.sin_desglose ? ' · ' + l.sin_desglose + ' sin discriminar (no suman)' : '') + '.</p></section>';
+    cuerpo = '<div class="kpi-grid">' + kpi('north_east', 'Débito fiscal (ventas)', plata(r.debito)) + kpi('south_west', 'Crédito fiscal (compras)', plata(r.credito)) +
+      kpi('account_balance', r.saldo >= 0 ? 'Saldo a pagar' : 'Saldo a favor', plata(Math.abs(r.saldo)), r.saldo > 0 ? 'warn' : 'ok') +
+      kpi('receipt', 'Percepciones y retenciones', plata(r.otros_tributos)) + '</div>' +
+      '<div class="dos">' + lado('Ventas: débito fiscal', r.ventas) + lado('Compras: crédito fiscal', r.compras) + '</div>' +
+      '<p class="muted small">Informativo, armado con lo cargado en el sistema. No reemplaza la declaración jurada ni incluye saldos de meses anteriores.</p>';
   } else if (I.tipo === 'retiros') {
     const r = await api('informes.retiros', I.todo ? { todo: true } : { desde: I.desde, hasta: I.hasta });
     S.infDatos = r;
@@ -813,6 +828,13 @@ function hojasInforme() {
       enc(['Concepto', 'Rubro'].concat(r.meses.map(nomMes)).concat(['Total']))].concat(r.filas.map(f => ({ celdas: [f.concepto, f.rubro].concat(f.valores.map(num)).concat([num(f.total)]) })))
       .concat([{ negrita: true, celdas: ['Total', ''].concat(r.totales.map(num)).concat([num(r.total)]) }]) }];
   }
+  if (I.tipo === 'iva') {
+    const lado = (t, l) => [{ negrita: true, celdas: [t] }, enc(['Alícuota', 'Neto gravado', 'IVA'])]
+      .concat(l.por.map(a => ({ celdas: [a.tasa + ' %', num(a.neto), num(a.iva)] }))).concat([{ negrita: true, celdas: ['Total', num(l.neto), num(l.iva)] }, { celdas: [] }]);
+    return [{ nombre: 'Posicion IVA', anchos: [34, 18, 18], filas: [{ negrita: true, celdas: ['Posición de IVA – ' + nomMes(r.mes) + ' (informativo)'] }, { celdas: [] }]
+      .concat(lado('Ventas (débito fiscal)', r.ventas)).concat(lado('Compras (crédito fiscal)', r.compras))
+      .concat([{ celdas: ['Débito − crédito', '', num(r.saldo)] }, { celdas: ['Percepciones y retenciones de compras', '', num(r.otros_tributos)] }]) }];
+  }
   if (I.tipo === 'retiros') {
     const per = r.todo ? 'desde el inicio' : nomMes(r.desde) + ' a ' + nomMes(r.hasta);
     const filas = r.filas.map(f => ({ celdas: [f.cliente, num(f.cobrado), num(f.retirado), num(f.quedo)] }));
@@ -914,6 +936,9 @@ VISTAS.config = async function () {
     campoHtml({ n: 'empresa', label: 'Nombre de la empresa', valor: g.empresa }) +
     campoHtml({ n: 'dia_limite_default', label: 'Día límite de cobro general', tipo: 'number', step: 1, min: 1, max: 31, valor: g.dia_limite_default, ayuda: 'Se usa para los clientes que no tienen un día propio.' }) +
     campoHtml({ n: 'email_avisos', label: 'Mail para avisos', tipo: 'email', valor: g.email_avisos, ayuda: 'Vacío: se usa el mail de la cuenta dueña del servidor.' }) +
+    campoHtml({ n: 'responsable_inscripto', label: 'Responsable inscripto en IVA (discrimina IVA en los comprobantes)', tipo: 'check', valor: g.responsable_inscripto === 'SI' }) +
+    '<div id="c-ri" class="' + (g.responsable_inscripto === 'SI' ? '' : 'hidden') + '">' + campoHtml({ n: 'ri_desde', label: 'Desde', tipo: 'date', valor: g.ri_desde || hoy().slice(0, 8) + '01',
+      ayuda: 'Los comprobantes anteriores quedan como estaban. La rentabilidad se calcula sobre el neto (sin IVA ni percepciones).' }) + '</div>' +
     (S.modo === 'COMPLETO' ? campoHtml({ n: 'maestra_id', label: 'Planilla MAESTRA (ID)', valor: g.maestra_id, ayuda: 'El código largo que aparece en la dirección de la planilla, entre /d/ y /edit.' }) : '') +
     '<div class="modal-pie">' + boton('cfgGuardar', 'Guardar', 'save', '', 'btn-primary') + '</div></form></section>' +
     '<section class="card"><h2>Numeración</h2>' + tabla([{ t: 'Tipo' }, { t: 'Último número', c: 'num' }], S.numeradores.map(n => ({ c: [esc(n.tipo), n.ultimo] }))) +
@@ -940,6 +965,8 @@ VISTAS.config = async function () {
     '<section class="card"><h2>Mantenimiento</h2><div class="acciones">' + (puede('config') ? boton('reinstalar', 'Revisar instalación', 'build') : '') +
     boton('desconectar', 'Desconectar este dispositivo', 'phonelink_erase') + '</div>' +
     (puede('config') ? '<p class="muted small" style="margin-top:10px">"Revisar instalación" vuelve a crear las hojas que falten y reprograma la tarea diaria (abonos del día 1 y avisos). No borra datos.</p>' : '') + '</section>';
+  const ri = $('#f-responsable_inscripto');
+  if (ri) ri.addEventListener('change', () => $('#c-ri').classList.toggle('hidden', !ri.checked));
   if (esPrincipal()) api('usuarios.listar', {}, { silencioso: true }).then(pintarUsuarios).catch(() => {});
   if (!puede('config')) return;
   if (S.modo === 'COMPLETO') {
@@ -1044,6 +1071,39 @@ function formEntidad(circ, c) {
  * Nuevo comprobante. En compras (salvo notas de crédito), al registrarlo se pregunta si ya fue pagado:
  * si lo fue, se carga el pago en el mismo paso; si no, queda pendiente en Cuentas a pagar.
  */
+// ------------------------------------------------------------ IVA y moneda (bloque 2)
+function esRI() { return !!(S.config && S.config.responsable_inscripto === 'SI'); }
+const TASAS = [['21', '21 %'], ['10.5', '10,5 %'], ['27', '27 %'], ['5', '5 %'], ['2.5', '2,5 %'], ['0', '0 %']];
+const NETOS = [[21, 'neto_21', 'Neto gravado 21 %'], [10.5, 'neto_105', 'Neto gravado 10,5 %'], [27, 'neto_27', 'Neto gravado 27 %']];
+
+/** Mismo cálculo que el servidor: líneas en la moneda original, pasadas a pesos una por una. */
+function calcularComp(v) {
+  const tc = v.moneda === 'USD' ? Number(v.tipo_cambio) || 0 : 1, ps = x => r2(x * tc);
+  let neto = 0, iva = 0, otros = 0, orig;
+  if (esRI() && v.modo === 'neto') {
+    NETOS.forEach(([t, k]) => { const n = r2(v[k]); neto += ps(n); iva += ps(r2(n * t / 100)); });
+    otros = ps(r2(v.no_gravado_exento)) + ps(r2(v.otros_tributos));
+    orig = NETOS.reduce((a, [t, k]) => a + r2(v[k]) + r2(r2(v[k]) * t / 100), 0) + r2(v.no_gravado_exento) + r2(v.otros_tributos);
+  } else if (esRI() && v.modo === 'total') {
+    const tot = r2(v.importe), n = r2(tot / (1 + Number(v.tasa) / 100));
+    neto = ps(n); iva = ps(r2(tot - n)); orig = tot;
+  } else { orig = r2(v.importe); return { total: ps(orig), iva: 0, orig: orig }; }
+  return { total: r2(neto + iva + otros), iva: r2(iva), orig: r2(orig) };
+}
+
+/** Lo que viaja al servidor según el modo elegido. */
+function payloadComp(v) {
+  const d = Object.assign({}, v);
+  if (esRI() && d.modo === 'neto') {
+    d.alicuotas = NETOS.map(([t, k]) => ({ tasa: t, neto: Number(d[k]) || 0 })).filter(a => a.neto);
+    delete d.importe; delete d.tasa;
+  } else if (esRI() && d.modo === 'total') { /* importe + tasa */ }
+  else { delete d.modo; delete d.tasa; delete d.no_gravado_exento; delete d.otros_tributos; }
+  NETOS.forEach(([, k]) => delete d[k]);
+  if (d.moneda !== 'USD') { delete d.tipo_cambio; d.moneda = 'ARS'; }
+  return d;
+}
+
 function formComprobante(circ, entidadId) {
   const C = CIR[circ];
   if (!optEnt(circ).length) return toast('Primero cargá un ' + C.ent + '.', 'error');
@@ -1054,12 +1114,21 @@ function formComprobante(circ, entidadId) {
     { n: 'entidad_id', label: C.Ent, tipo: 'select', opciones: optEnt(circ), valor: entidadId, req: true },
     { n: 'concepto_id', label: 'Concepto', tipo: 'select', opciones: optConceptos(C.conceptoTipo), req: true },
     { n: 'fecha', label: 'Fecha', tipo: 'date', valor: hoy(), req: true },
+    { n: 'moneda', label: 'Moneda', tipo: 'select', opciones: [['ARS', 'Pesos'], ['USD', 'Dólares']], valor: 'ARS' },
+    { n: 'tipo_cambio', label: 'Tipo de cambio', tipo: 'number', step: 'any', min: 0.0001, ayuda: 'El del comprobante. Todo se registra en pesos y queda anotado el importe en dólares.' }]
+    .concat(esRI() ? [
+      { n: 'modo', label: 'Cómo lo cargás', tipo: 'select', valor: 'neto', opciones: [['neto', 'Por neto (discrimina IVA)'], ['total', 'Total con IVA incluido'], ['sin', compra ? 'Sin IVA (factura C, monotributista, recibo)' : 'Sin discriminar IVA']] }]
+      .concat(NETOS.map(([, k, l]) => ({ n: k, label: l, tipo: 'number', step: 0.01, min: 0 })))
+      .concat([{ n: 'no_gravado_exento', label: 'No gravado o exento', tipo: 'number', step: 0.01, min: 0 },
+        { n: 'otros_tributos', label: compra ? 'Percepciones y retenciones' : 'Otros tributos', tipo: 'number', step: 0.01, min: 0, ayuda: 'Todo junto, en un solo importe.' },
+        { n: 'tasa', label: 'Alícuota de IVA', tipo: 'select', opciones: TASAS, valor: '21' }]) : [])
+    .concat([
     { n: 'importe', label: 'Importe total', tipo: 'number', min: 0.01, req: true },
     { n: 'detalle', label: 'Detalle' },
     { n: 'vencimiento', label: compra ? 'Vence el' : 'Fecha límite de cobro', tipo: 'date', valor: compra ? hoy() : '',
       ayuda: compra ? 'Fecha en que hay que pagarlo. Se usa para los avisos en Inicio.' : 'Vacío: se calcula con el día límite del cliente.' },
     { n: 'aplica_a', label: 'Aplicar a', tipo: 'select', opciones: [['', 'No aplicar (queda a cuenta)']] },
-    { n: 'nro_factura_real', label: C.nroLargo }];
+    { n: 'nro_factura_real', label: C.nroLargo }]);
   let datos = null;
 
   function paso1() {
@@ -1069,6 +1138,26 @@ function formComprobante(circ, entidadId) {
       '<div class="modal-pie"><button type="button" class="btn" data-act="cerrar">Cancelar</button><button type="submit" class="btn btn-primary">' + (compra ? 'Continuar' : 'Emitir') + '</button></div></form>');
     if (datos) campos.forEach(c => { if (datos[c.n] !== undefined && c.n !== 'aplica_a') $('#f-' + c.n).value = datos[c.n]; });
     const tipo = $('#f-tipo'), ent = $('#f-entidad_id'), fec = $('#f-fecha'), ven = $('#f-vencimiento');
+    $('#c-importe').insertAdjacentHTML('afterend', '<div class="campo" id="c-calc"><div class="resumen"><div><b>Total en pesos</b><span id="calc-det"></span></div><b class="num" id="calc-tot"></b></div></div>');
+    function montos() {
+      const v = valores(campos), ri = esRI(), modo = ri ? v.modo : '';
+      const usd = v.moneda === 'USD', porNeto = modo === 'neto';
+      $('#c-tipo_cambio').classList.toggle('hidden', !usd); $('#f-tipo_cambio').required = usd;
+      NETOS.forEach(([, k]) => $('#c-' + k) && $('#c-' + k).classList.toggle('hidden', !porNeto));
+      ['no_gravado_exento', 'otros_tributos'].forEach(k => $('#c-' + k) && $('#c-' + k).classList.toggle('hidden', !porNeto));
+      if ($('#c-tasa')) $('#c-tasa').classList.toggle('hidden', modo !== 'total');
+      $('#c-importe').classList.toggle('hidden', porNeto); $('#f-importe').required = !porNeto;
+      $('#c-importe label').textContent = modo === 'total' ? 'Total con IVA incluido' : 'Importe total';
+      const c = calcularComp(v);
+      $('#c-calc').classList.toggle('hidden', !(usd || (ri && modo !== 'sin')));
+      $('#calc-tot').textContent = plata(c.total);
+      $('#calc-det').textContent = (ri && modo !== 'sin' ? 'IVA ' + plata(c.iva) : '') + (usd ? (ri && modo !== 'sin' ? ' · ' : '') + 'US$ ' + c.orig.toLocaleString('es-AR', { minimumFractionDigits: 2 }) : '');
+    }
+    $('#form').addEventListener('input', montos); $('#form').addEventListener('change', montos);
+    const conTasa = () => { const c = S.conceptos.find(x => x.id === $('#f-concepto_id').value); if (c && c.alicuota !== '' && c.alicuota !== undefined && $('#f-tasa')) $('#f-tasa').value = String(c.alicuota); };
+    if (!datos) conTasa();
+    $('#f-concepto_id').addEventListener('change', conTasa);
+    montos();
     async function ajustar() {
       const nc = tipo.value === C.credito;
       $('#c-aplica_a').classList.toggle('hidden', !nc);
@@ -1090,13 +1179,15 @@ function formComprobante(circ, entidadId) {
     $('#form').addEventListener('submit', e => {
       e.preventDefault();
       datos = valores(campos);
+      if (esRI() && datos.modo === 'neto' && !(calcularComp(datos).total > 0)) return toast('Cargá algún importe.', 'error');
+      datos.importe_calc = calcularComp(datos).total;
       if (compra && datos.tipo !== C.credito) paso2(); else emitir(null);
     });
   }
 
   function resumen() {
     return '<div class="resumen"><div><b>' + esc(entidad(circ, datos.entidad_id).nombre) + '</b><span>' + esc(C.tipos[datos.tipo]) + ' del ' + fecha(datos.fecha) +
-      (datos.nro_factura_real ? ' · ' + esc(datos.nro_factura_real) : '') + '</span></div><b class="num">' + plata(datos.importe) + '</b></div>';
+      (datos.nro_factura_real ? ' · ' + esc(datos.nro_factura_real) : '') + '</span></div><b class="num">' + plata(datos.importe_calc) + '</b></div>';
   }
 
   // El cartel: ¿ya fue pagado?
@@ -1116,7 +1207,7 @@ function formComprobante(circ, entidadId) {
     const cp = [
       { n: 'cuenta_id', label: 'Pagado desde', tipo: 'select', opciones: optCuentas(), req: true },
       { n: 'fecha', label: 'Fecha de pago', tipo: 'date', valor: datos.fecha, req: true },
-      { n: 'importe', label: 'Importe pagado', tipo: 'number', min: 0.01, max: datos.importe, valor: datos.importe, req: true, ayuda: 'Si pagaste una parte, el resto queda pendiente.' },
+      { n: 'importe', label: 'Importe pagado (en pesos)', tipo: 'number', min: 0.01, max: datos.importe_calc, valor: datos.importe_calc, req: true, ayuda: 'Si pagaste una parte, el resto queda pendiente.' },
       { n: 'detalle', label: 'Detalle del pago (opcional)' }];
     abrirModal('<h2>Registrar el pago</h2>' + resumen() +
       '<form id="form" class="form">' + cp.map(campoHtml).join('') +
@@ -1126,7 +1217,8 @@ function formComprobante(circ, entidadId) {
   }
 
   async function emitir(pago) {
-    const d = Object.assign({}, datos);
+    const d = payloadComp(datos);
+    delete d.importe_calc;
     if (d.tipo === C.credito) delete d.vencimiento; else delete d.aplica_a;
     if (pago) d.pago = pago;
     try {
@@ -1264,6 +1356,8 @@ function formMaestro(titulo, accion, o, tipos) {
     if (o.app && !apps.some(a => a[0] === o.app)) apps.push([o.app, o.app]);
     campos.push({ n: 'app', label: 'App de la MAESTRA', tipo: 'select', valor: o.app || '', opciones: [['', 'Ninguna']].concat(apps),
       ayuda: 'Solo para ingresos. Las ventas de este concepto pasan a la MAESTRA (abonos a CUOTAS, el resto a VENTAS).' });
+    if (esRI()) campos.push({ n: 'alicuota', label: 'Alícuota de IVA habitual', tipo: 'select', valor: o.alicuota === undefined ? '' : String(o.alicuota), opciones: [['', 'Sin IVA / no definida']].concat(TASAS),
+      ayuda: 'Se propone al cargar comprobantes. En los abonos, el importe se toma con IVA incluido y se desglosa con esta alícuota.' });
   }
   if (o.id) campos.push({ n: 'activo', label: 'Estado', tipo: 'select', valor: o.activo === 'NO' ? 'NO' : 'SI', opciones: [['SI', 'Activo'], ['NO', 'Inactivo']] });
   abrirForm({ titulo: titulo, campos: campos, ok: async v => { if (o.id) v.id = o.id; await api(accion, v); toast('Guardado.', 'ok'); await cargarMaestros(); } });
@@ -1401,7 +1495,7 @@ const ACT = {
     const t = INFORMES.find(x => x[0] === S.inf.tipo)[1];
     descargar(xlsx(hojasInforme()), t + ' - ' + hoy() + '.xlsx');
   },
-  infPdf: () => descargarPdf('informes.pdf', { informe: S.inf.tipo, params: S.inf.tipo === 'saldos' ? { fecha: S.inf.fecha } : S.inf.tipo === 'retiros' && S.inf.todo ? { todo: true } : { desde: S.inf.desde, hasta: S.inf.hasta } }),
+  infPdf: () => descargarPdf('informes.pdf', { informe: S.inf.tipo, params: S.inf.tipo === 'saldos' ? { fecha: S.inf.fecha } : S.inf.tipo === 'iva' ? { mes: S.inf.mes || mesActual() } : S.inf.tipo === 'retiros' && S.inf.todo ? { todo: true } : { desde: S.inf.desde, hasta: S.inf.hasta } }),
   infRango: d => {
     const m = mesActual();
     S.inf.todo = d.v === 'todo';
@@ -1423,6 +1517,8 @@ const ACT = {
   cfgGuardar: async () => {
     const v = { empresa: $('#f-empresa').value.trim(), dia_limite_default: $('#f-dia_limite_default').value.trim(), email_avisos: $('#f-email_avisos').value.trim() };
     if ($('#f-maestra_id')) v.maestra_id = $('#f-maestra_id').value.trim();
+    v.responsable_inscripto = $('#f-responsable_inscripto').checked ? 'SI' : 'NO';
+    if (v.responsable_inscripto === 'SI') v.ri_desde = $('#f-ri_desde').value;
     if (!$('#cfg').reportValidity()) return;
     await api('config.guardar', v); toast('Configuración guardada.', 'ok'); recargar();
   },
@@ -1488,7 +1584,8 @@ const CHG = {
   tesFiltro: () => { S.fTes = { mes: $('#ft-mes').value, cuenta_id: $('#ft-cta').value, anulados: $('#ft-anu').checked }; recargar(); },
   entInactivos: el => { (circDe(el.dataset) === 'VENTA' ? S.fCli : S.fPro).inactivos = el.checked; recargar(); },
   infFiltro: () => {
-    if ($('#fi-fecha')) S.inf.fecha = $('#fi-fecha').value || hoy();
+    if ($('#fi-mes')) S.inf.mes = $('#fi-mes').value || mesActual();
+    else if ($('#fi-fecha')) S.inf.fecha = $('#fi-fecha').value || hoy();
     else { S.inf.desde = $('#fi-desde').value || S.inf.desde; S.inf.hasta = $('#fi-hasta').value || S.inf.hasta; }
     recargar();
   }

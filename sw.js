@@ -1,5 +1,5 @@
 // Si-Gestión – Service Worker. Al publicar cambios, subir el número de versión.
-const CACHE = "si-gestion-v14";
+const CACHE = "si-gestion-v15";
 const ARCHIVOS = ["./", "./index.html", "./style.css", "./app.js", "./manifest.json", "./icons/icon-192.png", "./icons/icon-512.png"];
 
 self.addEventListener("install", (e) => {
