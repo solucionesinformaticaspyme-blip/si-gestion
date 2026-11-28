@@ -1079,16 +1079,16 @@ const NETOS = [[21, 'neto_21', 'Neto gravado 21 %'], [10.5, 'neto_105', 'Neto gr
 /** Mismo cálculo que el servidor: líneas en la moneda original, pasadas a pesos una por una. */
 function calcularComp(v) {
   const tc = v.moneda === 'USD' ? Number(v.tipo_cambio) || 0 : 1, ps = x => r2(x * tc);
-  let neto = 0, iva = 0, otros = 0, orig;
+  let neto = 0, iva = 0, otros = 0, orig, ivaOrig = 0;
   if (esRI() && v.modo === 'neto') {
-    NETOS.forEach(([t, k]) => { const n = r2(v[k]); neto += ps(n); iva += ps(r2(n * t / 100)); });
+    NETOS.forEach(([t, k]) => { const n = r2(v[k]), i = r2(n * t / 100); neto += ps(n); iva += ps(i); ivaOrig += i; });
     otros = ps(r2(v.no_gravado_exento)) + ps(r2(v.otros_tributos));
     orig = NETOS.reduce((a, [t, k]) => a + r2(v[k]) + r2(r2(v[k]) * t / 100), 0) + r2(v.no_gravado_exento) + r2(v.otros_tributos);
   } else if (esRI() && v.modo === 'total') {
     const tot = r2(v.importe), n = r2(tot / (1 + Number(v.tasa) / 100));
-    neto = ps(n); iva = ps(r2(tot - n)); orig = tot;
-  } else { orig = r2(v.importe); return { total: ps(orig), iva: 0, orig: orig }; }
-  return { total: r2(neto + iva + otros), iva: r2(iva), orig: r2(orig) };
+    neto = ps(n); iva = ps(r2(tot - n)); ivaOrig = r2(tot - n); orig = tot;
+  } else { orig = r2(v.importe); return { total: ps(orig), iva: 0, orig: orig, ivaOrig: 0 }; }
+  return { total: r2(neto + iva + otros), iva: r2(iva), orig: r2(orig), ivaOrig: r2(ivaOrig) };
 }
 
 /** Lo que viaja al servidor según el modo elegido. */
@@ -1138,7 +1138,7 @@ function formComprobante(circ, entidadId) {
       '<div class="modal-pie"><button type="button" class="btn" data-act="cerrar">Cancelar</button><button type="submit" class="btn btn-primary">' + (compra ? 'Continuar' : 'Emitir') + '</button></div></form>');
     if (datos) campos.forEach(c => { if (datos[c.n] !== undefined && c.n !== 'aplica_a') $('#f-' + c.n).value = datos[c.n]; });
     const tipo = $('#f-tipo'), ent = $('#f-entidad_id'), fec = $('#f-fecha'), ven = $('#f-vencimiento');
-    $('#c-importe').insertAdjacentHTML('afterend', '<div class="campo" id="c-calc"><div class="resumen"><div><b>Total en pesos</b><span id="calc-det"></span></div><b class="num" id="calc-tot"></b></div></div>');
+    $('#c-importe').insertAdjacentHTML('afterend', '<div class="campo" id="c-calc"></div>');
     function montos() {
       const v = valores(campos), ri = esRI(), modo = ri ? v.modo : '';
       const usd = v.moneda === 'USD', porNeto = modo === 'neto';
@@ -1148,10 +1148,14 @@ function formComprobante(circ, entidadId) {
       if ($('#c-tasa')) $('#c-tasa').classList.toggle('hidden', modo !== 'total');
       $('#c-importe').classList.toggle('hidden', porNeto); $('#f-importe').required = !porNeto;
       $('#c-importe label').textContent = modo === 'total' ? 'Total con IVA incluido' : 'Importe total';
-      const c = calcularComp(v);
-      $('#c-calc').classList.toggle('hidden', !(usd || (ri && modo !== 'sin')));
-      $('#calc-tot').textContent = plata(c.total);
-      $('#calc-det').textContent = (ri && modo !== 'sin' ? 'IVA ' + plata(c.iva) : '') + (usd ? (ri && modo !== 'sin' ? ' · ' : '') + 'US$ ' + c.orig.toLocaleString('es-AR', { minimumFractionDigits: 2 }) : '');
+      const c = calcularComp(v), conIva = ri && modo !== 'sin';
+      $('#c-calc').classList.toggle('hidden', !(usd || conIva));
+      // Una fila por dato y una columna por moneda: nada mezclado en un mismo lugar
+      const usdTxt = x => 'US$ ' + Number(x || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const fila = (t, enUsd, enPesos, fuerte) => '<tr' + (fuerte ? ' class="fuerte"' : '') + '><td class="et">' + t + '</td>' + (usd ? '<td class="num">' + usdTxt(enUsd) + '</td>' : '') + '<td class="num">' + plata(enPesos) + '</td></tr>';
+      $('#c-calc').innerHTML = '<table class="calc"><thead><tr><td></td>' + (usd ? '<th class="num">Dólares</th>' : '') + '<th class="num">Pesos</th></tr></thead><tbody>' +
+        (conIva ? fila('IVA', c.ivaOrig, c.iva) : '') + fila('Total', c.orig, c.total, true) + '</tbody></table>' +
+        (usd ? '<small>Se registra en pesos. Tipo de cambio: ' + (Number(v.tipo_cambio) || 0).toLocaleString('es-AR') + '.</small>' : '');
     }
     $('#form').addEventListener('input', montos); $('#form').addEventListener('change', montos);
     const conTasa = () => { const c = S.conceptos.find(x => x.id === $('#f-concepto_id').value); if (c && c.alicuota !== '' && c.alicuota !== undefined && $('#f-tasa')) $('#f-tasa').value = String(c.alicuota); };
