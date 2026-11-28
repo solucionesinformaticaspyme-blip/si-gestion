@@ -106,7 +106,7 @@ const LECTURAS = new Set(['inicio', 'clientes.listar', 'abonos.listar', 'ventas.
   'cobrar.estadoCuenta', 'proveedores.listar', 'compras.listar', 'pagar.saldos', 'pagar.pendientes', 'pagar.pagos', 'pagar.estadoCuenta',
   'tesoreria.saldos', 'tesoreria.movimientos', 'tesoreria.paraRetirar', 'informes.rentabilidad', 'informes.conceptos', 'informes.saldos',
   'informes.retiros', 'informes.iva', 'config.leer', 'gastos.estado', 'respaldo.estado', 'maestra.estado', 'maestra.apps']);
-const SIN_CAMBIOS = new Set(['clave.estado', 'usuarios.yo', 'acceso.salir', 'acceso.estado', 'acceso.entrar', 'acceso.recuperar', 'acceso.restablecer', 'acceso.crearPrincipal', 'cobrar.estadoCuentaPdf', 'pagar.estadoCuentaPdf', 'informes.pdf', 'lote']);   // consultas que no se guardan
+const SIN_CAMBIOS = new Set(['clave.estado', 'arca.analizar', 'usuarios.yo', 'acceso.salir', 'acceso.estado', 'acceso.entrar', 'acceso.recuperar', 'acceso.restablecer', 'acceso.crearPrincipal', 'cobrar.estadoCuentaPdf', 'pagar.estadoCuentaPdf', 'informes.pdf', 'lote']);   // consultas que no se guardan
 const NO_PRECARGAR = new Set(['gastos.estado']);   // consulta la app de gastos: solo cuando se abre Configuración
 const LS_CACHE = 'sg_cache2', FRESCO_MS = 20000, MAX_GUARDADOS = 80;   // "2": descarta lo guardado por versiones anteriores de la app
 const CACHE = {}, EN_CURSO = {};
@@ -365,6 +365,7 @@ function permisoBoton(act, c) {
   if (/Anular$/.test(act)) return ['anular'];
   if (['compNuevo', 'cancNueva', 'entNuevo', 'entEditar', 'credAplicar', 'compNro'].indexOf(act) >= 0) return [porCirc];
   if (['aboNuevo', 'venAbonos'].indexOf(act) >= 0) return ['ventas'];
+  if (act === 'arcaImportar') return [porCirc];
   if (['movNuevo', 'trfNueva', 'retNuevo'].indexOf(act) >= 0) return ['tesoreria'];
   if (['infExcel', 'infPdf'].indexOf(act) >= 0) return ['informes'];
   if (['cuenta', 'pdf', 'estado'].indexOf(act) >= 0) return [porCirc, 'informes'];
@@ -589,7 +590,7 @@ async function vistaComprobantes(circ) {
 }
 
 VISTAS.ventas = async function () {
-  $('#acciones').innerHTML = boton('venAbonos', 'Generar abonos', 'event_repeat') + boton('compNuevo', 'Nuevo comprobante', 'add', ' data-c="VENTA"', 'btn-primary');
+  $('#acciones').innerHTML = boton('venAbonos', 'Generar abonos', 'event_repeat') + boton('arcaImportar', 'Importar de ARCA', 'upload_file', ' data-c="VENTA"') + boton('compNuevo', 'Nuevo comprobante', 'add', ' data-c="VENTA"', 'btn-primary');
   $('#main').innerHTML = await vistaComprobantes('VENTA');
 };
 
@@ -601,7 +602,7 @@ VISTAS.compras = async function () {
     $('#acciones').innerHTML = boton('entNuevo', 'Nuevo proveedor', 'add_business', ' data-c="COMPRA"', 'btn-primary');
     $('#main').innerHTML = seg + '<section class="card">' + buscadorEntidades('COMPRA', S.fPro) + '<div id="ent-lista">' + tablaEntidades('COMPRA', listaEntidades('COMPRA', S.fPro, S.proveedores)) + '</div></section>';
   } else {
-    $('#acciones').innerHTML = boton('compNuevo', 'Nuevo comprobante', 'add', ' data-c="COMPRA"', 'btn-primary');
+    $('#acciones').innerHTML = boton('arcaImportar', 'Importar de ARCA', 'upload_file', ' data-c="COMPRA"') + boton('compNuevo', 'Nuevo comprobante', 'add', ' data-c="COMPRA"', 'btn-primary');
     $('#main').innerHTML = seg + await vistaComprobantes('COMPRA');
   }
 };
@@ -1104,6 +1105,196 @@ function payloadComp(v) {
   return d;
 }
 
+// ------------------------------------------------------------ Importar desde ARCA (bloque 3)
+// Se lee en el navegador el archivo que el usuario bajó de "Mis Comprobantes" (Excel o CSV): no se usa ninguna
+// clave ni servicio externo. Las columnas se reconocen por su nombre, así sirve aunque ARCA traiga menos campos.
+
+/** Lector mínimo de .xlsx: descomprime con el navegador y lee la primera hoja. Devuelve filas de celdas. */
+async function leerXlsx(buf) {
+  const dv = new DataView(buf), u8 = new Uint8Array(buf), dec = new TextDecoder();
+  let eocd = -1;
+  for (let i = buf.byteLength - 22; i >= Math.max(0, buf.byteLength - 66000); i--) if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  if (eocd < 0) throw new Error('El archivo no es un Excel válido.');
+  const n = dv.getUint16(eocd + 10, true); let p = dv.getUint32(eocd + 16, true);
+  const ent = {};
+  for (let k = 0; k < n; k++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) break;
+    const met = dv.getUint16(p + 10, true), tam = dv.getUint32(p + 20, true), ln = dv.getUint16(p + 28, true), le = dv.getUint16(p + 30, true), lc = dv.getUint16(p + 32, true), off = dv.getUint32(p + 42, true);
+    ent[dec.decode(u8.subarray(p + 46, p + 46 + ln))] = { met, tam, off };
+    p += 46 + ln + le + lc;
+  }
+  async function archivo(nombre) {
+    const e = ent[nombre]; if (!e) return null;
+    const ini = e.off + 30 + dv.getUint16(e.off + 26, true) + dv.getUint16(e.off + 28, true);
+    const datos = u8.subarray(ini, ini + e.tam);
+    if (e.met === 0) return dec.decode(datos);
+    if (typeof DecompressionStream === 'undefined') throw new Error('Este navegador no puede leer Excel: bajá el archivo en CSV.');
+    const st = new Blob([datos]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+    return await new Response(st).text();
+  }
+  const xml = t => new DOMParser().parseFromString(t, 'application/xml');
+  const comp = [];
+  const sst = await archivo('xl/sharedStrings.xml');
+  if (sst) xml(sst).querySelectorAll('si').forEach(si => comp.push(Array.from(si.getElementsByTagName('t')).map(t => t.textContent).join('')));
+  const hoja = Object.keys(ent).filter(k => /^xl\/worksheets\/sheet\d+\.xml$/.test(k)).sort()[0];
+  if (!hoja) throw new Error('El Excel no tiene hojas.');
+  const filas = [];
+  xml(await archivo(hoja)).querySelectorAll('sheetData > row').forEach(r => {
+    const fila = [];
+    r.querySelectorAll('c').forEach(c => {
+      const ref = c.getAttribute('r') || '', letras = ref.replace(/\d/g, '');
+      let col = 0; for (const ch of letras) col = col * 26 + ch.charCodeAt(0) - 64;
+      const t = c.getAttribute('t'), v = c.querySelector('v'), is = c.querySelector('is');
+      let val = v ? v.textContent : (is ? is.textContent : '');
+      if (t === 's') val = comp[Number(val)] || '';
+      else if (t !== 'str' && t !== 'inlineStr' && val !== '' && !isNaN(Number(val))) val = Number(val);
+      fila[(col || fila.length + 1) - 1] = val;
+    });
+    filas.push(fila);
+  });
+  return filas;
+}
+
+function leerCsv(txt) {
+  txt = txt.replace(/^﻿/, '');
+  const prim = txt.split(/\r?\n/).find(l => /fecha/i.test(l)) || txt.split(/\r?\n/)[0];
+  const sep = (prim.match(/;/g) || []).length > (prim.match(/,/g) || []).length ? ';' : ',';
+  const filas = []; let fila = [], campo = '', q = false;
+  for (let i = 0; i < txt.length; i++) {
+    const ch = txt[i];
+    if (q) { if (ch === '"') { if (txt[i + 1] === '"') { campo += '"'; i++; } else q = false; } else campo += ch; }
+    else if (ch === '"') q = true;
+    else if (ch === sep) { fila.push(campo); campo = ''; }
+    else if (ch === '\n' || ch === '\r') { if (ch === '\r' && txt[i + 1] === '\n') i++; fila.push(campo); filas.push(fila); fila = []; campo = ''; }
+    else campo += ch;
+  }
+  if (campo || fila.length) { fila.push(campo); filas.push(fila); }
+  return filas;
+}
+
+const normCab = t => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[.:]/g, '').replace(/\s+/g, ' ').trim();
+function numArca(v) {
+  if (typeof v === 'number') return v;
+  let x = String(v || '').replace(/[^\d,.\-]/g, '');
+  if (!x) return 0;
+  if (x.indexOf(',') >= 0) x = x.replace(/\./g, '').replace(',', '.');
+  return Number(x) || 0;
+}
+function fechaArca(v) {
+  if (typeof v === 'number' && v > 20000) { const d = new Date(Date.UTC(1899, 11, 30) + v * 86400000); return d.toISOString().slice(0, 10); }
+  const t = String(v || '').trim();
+  let m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); if (m) return m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2);
+  m = t.match(/^(\d{4})-(\d{2})-(\d{2})/); if (m) return m[0];
+  return '';
+}
+
+/** Convierte las filas del archivo en comprobantes. Devuelve { circuito, filas, faltan }. */
+function interpretarArca(tabla, circPedido) {
+  const iCab = tabla.findIndex(f => f && f.some(c => normCab(c) === 'fecha') && f.some(c => normCab(c) === 'tipo'));
+  if (iCab < 0) throw new Error('No encuentro los encabezados de "Mis Comprobantes" (Fecha, Tipo, …). ¿Es el archivo correcto?');
+  const cab = tabla[iCab].map(normCab), col = n => cab.indexOf(n);
+  const titulo = normCab((tabla[0] || [])[0]);
+  const recibidos = col('denominacion emisor') >= 0 || col('nro doc emisor') >= 0 || /recibidos/.test(titulo);
+  const circuito = recibidos ? 'COMPRA' : (col('denominacion receptor') >= 0 || /emitidos/.test(titulo) ? 'VENTA' : circPedido);
+  const lado = circuito === 'COMPRA' ? 'emisor' : 'receptor';
+  const req = { 'fecha': 'Fecha', 'tipo': 'Tipo', 'punto de venta': 'Punto de Venta', 'numero desde': 'Número Desde', 'imp total': 'Imp. Total' };
+  const faltan = Object.keys(req).filter(k => col(k) < 0 && !(k === 'numero desde' && col('numero') >= 0)).map(k => req[k]);
+  if (faltan.length) throw new Error('Al archivo le faltan estas columnas: ' + faltan.join(', ') + '. Volvé a bajarlo de ARCA incluyéndolas.');
+  const tasas = [['0', 0], ['2,5', 2.5], ['5', 5], ['10,5', 10.5], ['21', 21], ['27', 27]];
+  const filas = [];
+  tabla.slice(iCab + 1).forEach(f => {
+    if (!f || !f.some(c => c !== '' && c !== undefined && c !== null)) return;
+    const g = n => { const i = col(n); return i >= 0 ? f[i] : ''; };
+    const tipoTxt = String(g('tipo') || '').trim();
+    if (!tipoTxt && !g('imp total')) return;
+    const mon = String(g('moneda') || '$').trim().toUpperCase();
+    const moneda = ['$', 'PES', 'ARS', ''].indexOf(mon) >= 0 ? 'ARS' : (['USD', 'DOL', 'U$S', 'US$'].indexOf(mon) >= 0 ? 'USD' : mon);
+    const doc = String(g('nro doc ' + lado) || '').trim();
+    filas.push({
+      codigo: (tipoTxt.match(/^\d+/) || [''])[0], tipo_txt: tipoTxt,
+      tipo: /cr[eé]dito/i.test(tipoTxt) ? 'NC' : (/d[eé]bito/i.test(tipoTxt) ? 'ND' : 'FAC'),
+      fecha: fechaArca(g('fecha')), pv: numArca(g('punto de venta')), nro: numArca(g('numero desde') || g('numero')), nro_hasta: numArca(g('numero hasta')),
+      cae: String(g('cod autorizacion') || '').trim(), doc_tipo: String(g('tipo doc ' + lado) || '').trim(), doc_nro: /\d/.test(doc) ? doc : '',
+      nombre: String(g('denominacion ' + lado) || '').trim(),
+      moneda: moneda, tipo_cambio: moneda === 'ARS' ? 1 : numArca(g('tipo cambio')),
+      alicuotas: tasas.map(([t, n]) => ({ tasa: n, neto: numArca(g('neto grav iva ' + t + '%')), iva: numArca(g('iva ' + t + '%')) })).filter(a => a.neto || a.iva),
+      no_gravado_exento: numArca(g('neto no gravado')) + numArca(g('op exentas')), otros_tributos: numArca(g('otros tributos')),
+      total: numArca(g('imp total'))
+    });
+  });
+  if (!filas.length) throw new Error('El archivo no tiene comprobantes.');
+  return { circuito, filas };
+}
+
+function importarArca(circ) {
+  const ent = c => c === 'COMPRA' ? 'proveedor' : 'cliente';
+  abrirModal('<h2>Importar de ARCA</h2>' +
+    '<p class="small">Traé los comprobantes ' + (circ === 'COMPRA' ? 'recibidos' : 'emitidos') + ' desde el archivo de <b>Mis Comprobantes</b> y elegí cuáles registrar. No se usa tu clave fiscal: solo el archivo.</p>' +
+    '<ol class="pasos small"><li>En ARCA entrá a <b>Mis Comprobantes</b> → <b>' + (circ === 'COMPRA' ? 'Recibidos' : 'Emitidos') + '</b> y elegí las fechas.</li>' +
+    '<li>Descargá el resultado en <b>Excel</b> o <b>CSV</b>. Podés quitar columnas: las mínimas son Fecha, Tipo, Punto de Venta, Número Desde e Imp. Total.</li>' +
+    '<li>Elegí el archivo acá. Lo que ya importaste antes se reconoce y no se duplica.</li></ol>' +
+    '<div class="campo"><label for="arca-archivo">Archivo de Mis Comprobantes</label><input id="arca-archivo" type="file" accept=".xlsx,.csv,.txt"></div>' +
+    '<div class="modal-pie"><button type="button" class="btn" data-act="cerrar">Cancelar</button></div>');
+  $('#arca-archivo').addEventListener('change', async e => {
+    const f = e.target.files[0]; if (!f) return;
+    try {
+      cargando(true);
+      const tabla = /\.xlsx$/i.test(f.name) ? await leerXlsx(await f.arrayBuffer()) : leerCsv(await f.text());
+      const r = interpretarArca(tabla, circ);
+      const an = await api('arca.analizar', { circuito: r.circuito, filas: r.filas });
+      revisarArca(r.circuito, r.filas, an, r.circuito !== circ);
+    } catch (err) { toast(err.message, 'error'); e.target.value = ''; } finally { cargando(false); }
+  });
+}
+
+const ESTADO_ARCA = { NUEVO: ['verde', 'Nuevo'], YA_IMPORTADO: ['', 'Ya importado'], POSIBLE_DUPLICADO: ['ambar', '¿Duplicado?'], ERROR: ['rojo', 'Error'] };
+
+function revisarArca(circ, filas, an, cambio) {
+  const compra = circ === 'COMPRA', conc = optConceptos(compra ? 'GASTO' : 'INGRESO');
+  const selConc = (id, v) => '<select ' + id + '><option value="">Elegí…</option>' + conc.map(o => '<option value="' + o[0] + '"' + (o[0] === v ? ' selected' : '') + '>' + esc(o[1]) + '</option>').join('') + '</select>';
+  const nuevos = an.filter(a => a.estado === 'NUEVO').length;
+  const filasHtml = an.map(a => {
+    const f = filas[a.i], est = ESTADO_ARCA[a.estado], usable = a.estado === 'NUEVO' || a.estado === 'POSIBLE_DUPLICADO';
+    return { c: [
+      '<input type="checkbox" class="arca-tilde" data-i="' + a.i + '"' + (a.estado === 'NUEVO' ? ' checked' : '') + (usable ? '' : ' disabled') + '>',
+      '<span class="nw">' + fecha(f.fecha) + '</span>',
+      esc(f.tipo_txt.replace(/^\d+\s*-\s*/, '')) + '<br><span class="muted small">' + ('0000' + f.pv).slice(-5) + '-' + ('0000000' + f.nro).slice(-8) + '</span>',
+      esc(a.entidad || '') + (a.entidad_nueva ? ' <span class="chip azul">Se crea</span>' : ''),
+      usable ? selConc('class="arca-conc" data-i="' + a.i + '"', a.concepto_id) : '',
+      plata(a.importe || 0) + (f.moneda === 'USD' ? '<br><span class="muted small">US$ ' + f.total.toLocaleString('es-AR', { minimumFractionDigits: 2 }) + '</span>' : ''),
+      '<span class="chip ' + est[0] + '">' + est[1] + '</span>' + (a.con_iva ? ' <span class="chip">IVA</span>' : '') +
+        (a.error || a.aviso ? '<br><span class="muted small">' + esc(a.error || a.aviso) + '</span>' : '')] };
+  });
+  abrirModal('<h2>Revisá antes de importar</h2>' +
+    (cambio ? '<p class="small"><b>Atención:</b> el archivo es de comprobantes ' + (compra ? 'recibidos: se cargan como compras.' : 'emitidos: se cargan como ventas.') + '</p>' : '') +
+    '<p class="muted small" style="margin-bottom:10px">' + an.length + ' comprobantes en el archivo · ' + nuevos + ' nuevos. Los que ya importaste no se pueden volver a cargar; los marcados "¿Duplicado?" se parecen a uno cargado a mano y vienen destildados.</p>' +
+    '<div class="filtros"><div class="campo"><label>Concepto para los tildados sin concepto</label>' + selConc('id="arca-conc-todos"', '') + '</div>' +
+    '<div class="campo"><label for="arca-pago">Al importar, quedan</label><select id="arca-pago"><option value="">Pendientes de ' + (compra ? 'pago' : 'cobro') + '</option>' +
+      optCuentas().map(o => '<option value="' + o[0] + '">' + (compra ? 'Pagados' : 'Cobrados') + ' con ' + esc(o[1]) + '</option>').join('') + '</select></div></div>' +
+    tabla([{ t: '' }, { t: 'Fecha' }, { t: 'Comprobante' }, { t: compra ? 'Proveedor' : 'Cliente' }, { t: 'Concepto' }, { t: 'Total', c: 'num' }, { t: 'Estado' }], filasHtml) +
+    '<p class="muted small" style="margin-top:8px">Los ' + (compra ? 'proveedores' : 'clientes') + ' marcados "Se crea" se dan de alta con el nombre y el CUIT del archivo. "Pagados/Cobrados" registra el ' + (compra ? 'pago' : 'cobro') + ' de cada uno en su fecha (no aplica a notas de crédito).</p>' +
+    '<div class="modal-pie"><button type="button" class="btn" data-act="cerrar">Cancelar</button><button type="button" class="btn btn-primary" id="arca-ok">Importar</button></div>', true);
+  const contar = () => { const n = document.querySelectorAll('.arca-tilde:checked').length; $('#arca-ok').textContent = 'Importar ' + n + ' comprobante' + (n === 1 ? '' : 's'); $('#arca-ok').disabled = !n; };
+  document.querySelectorAll('.arca-tilde').forEach(t => t.addEventListener('change', contar));
+  $('#arca-conc-todos').addEventListener('change', e => document.querySelectorAll('.arca-conc').forEach(s => { if (!s.value && e.target.value) s.value = e.target.value; }));
+  contar();
+  $('#arca-ok').onclick = async () => {
+    const sel = Array.from(document.querySelectorAll('.arca-tilde:checked')).map(t => Number(t.dataset.i));
+    const conc = {}; document.querySelectorAll('.arca-conc').forEach(s => { conc[s.dataset.i] = s.value || $('#arca-conc-todos').value; });
+    const sinConc = sel.filter(i => !conc[i]);
+    if (sinConc.length) return toast('Elegí el concepto de ' + sinConc.length + ' comprobante' + (sinConc.length === 1 ? '' : 's') + ' (podés usar "Concepto para los tildados").', 'error');
+    try {
+      $('#arca-ok').disabled = true;
+      const r = await api('arca.importar', { circuito: circ, pago_cuenta_id: $('#arca-pago').value,
+        filas: sel.map(i => Object.assign({}, filas[i], { incluir: true, concepto_id: conc[i] })) });
+      cerrarModal();
+      toast('Importados ' + r.importados + ' comprobantes' + (r.nuevos ? ' y ' + r.nuevos + ' ' + (compra ? 'proveedores' : 'clientes') + ' nuevos' : '') + '.' +
+        (r.errores.length ? ' Con error: ' + r.errores.join(' · ') : ''), r.errores.length ? 'error' : 'ok');
+      await cargarMaestros(); recargar();
+    } catch (err) { toast(err.message, 'error'); $('#arca-ok').disabled = false; }
+  };
+}
+
 /** Bloque de importes del comprobante: filas editables (lo que se carga) y, abajo, IVA y total calculados. */
 function grillaHtml() {
   const fila = (n, l) => '<div class="g-fila" id="g-' + n + '"><label for="f-' + n + '">' + l + '</label>' +
@@ -1555,6 +1746,7 @@ const ACT = {
   conEditar: d => formMaestro('Editar concepto', 'conceptos.guardar', S.conceptos.find(c => c.id === d.id), [['INGRESO', 'Ingreso (ventas)'], ['GASTO', 'Gasto (compras)']]),
   ctaNueva: () => formMaestro('Nueva cuenta', 'cuentas.guardar', null, [['CAJA', 'Caja'], ['BANCO', 'Banco'], ['BILLETERA', 'Billetera']]),
   ctaEditar: d => formMaestro('Editar cuenta', 'cuentas.guardar', S.cuentas.find(c => c.id === d.id), [['CAJA', 'Caja'], ['BANCO', 'Banco'], ['BILLETERA', 'Billetera']]),
+  arcaImportar: d => importarArca(circDe(d)),
   miClave: () => abrirForm({ titulo: 'Cambiar mi contraseña', despues: false, campos: [
     { n: 'actual', label: 'Contraseña actual', tipo: 'password', req: true },
     { n: 'nueva', label: 'Contraseña nueva', tipo: 'password', req: true, ayuda: 'Mínimo 6 caracteres.' }, { n: 'repetir', label: 'Repetir contraseña nueva', tipo: 'password', req: true }],
