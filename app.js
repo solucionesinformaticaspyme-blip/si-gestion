@@ -1104,11 +1104,23 @@ function payloadComp(v) {
   return d;
 }
 
+/** Bloque de importes del comprobante: filas editables (lo que se carga) y, abajo, IVA y total calculados. */
+function grillaHtml() {
+  const fila = (n, l) => '<div class="g-fila" id="g-' + n + '"><label for="f-' + n + '">' + l + '</label>' +
+    '<input id="f-' + n + '" type="number" step="0.01" min="0" inputmode="decimal" placeholder="0,00"><span class="g-num g-ars" data-p="' + n + '"></span></div>';
+  const ri = esRI();
+  return '<div class="campo grilla" id="c-grilla"><div class="g-fila g-cab" id="g-cab"><span></span><span class="g-num" id="g-cab-mo">Pesos</span><span class="g-num g-ars">Pesos</span></div>' +
+    (ri ? NETOS.map(([, k, l]) => fila(k, l)).join('') + fila('no_gravado_exento', 'No gravado o exento') + fila('otros_tributos', GRILLA_OTROS) : '') +
+    fila('importe', 'Importe total') + '<div class="g-calc" id="g-calc"></div></div>';
+}
+let GRILLA_OTROS = 'Otros tributos';
+
 function formComprobante(circ, entidadId) {
   const C = CIR[circ];
   if (!optEnt(circ).length) return toast('Primero cargá un ' + C.ent + '.', 'error');
   if (!optConceptos(C.conceptoTipo).length) return toast('Primero creá un concepto de ' + (circ === 'VENTA' ? 'ingreso' : 'gasto') + ' en Configuración.', 'error');
   const compra = circ === 'COMPRA';
+  GRILLA_OTROS = compra ? 'Percepciones y retenciones' : 'Otros tributos';
   const campos = [
     { n: 'tipo', label: 'Tipo', tipo: 'select', opciones: Object.keys(C.tipos).map(k => [k, C.tipos[k]]) },
     { n: 'entidad_id', label: C.Ent, tipo: 'select', opciones: optEnt(circ), valor: entidadId, req: true },
@@ -1118,12 +1130,12 @@ function formComprobante(circ, entidadId) {
     { n: 'tipo_cambio', label: 'Tipo de cambio', tipo: 'number', step: 'any', min: 0.0001, ayuda: 'El del comprobante. Todo se registra en pesos y queda anotado el importe en dólares.' }]
     .concat(esRI() ? [
       { n: 'modo', label: 'Cómo lo cargás', tipo: 'select', valor: 'neto', opciones: [['neto', 'Por neto (discrimina IVA)'], ['total', 'Total con IVA incluido'], ['sin', compra ? 'Sin IVA (factura C, monotributista, recibo)' : 'Sin discriminar IVA']] }]
-      .concat(NETOS.map(([, k, l]) => ({ n: k, label: l, tipo: 'number', step: 0.01, min: 0 })))
-      .concat([{ n: 'no_gravado_exento', label: 'No gravado o exento', tipo: 'number', step: 0.01, min: 0 },
-        { n: 'otros_tributos', label: compra ? 'Percepciones y retenciones' : 'Otros tributos', tipo: 'number', step: 0.01, min: 0, ayuda: 'Todo junto, en un solo importe.' },
+      .concat(NETOS.map(([, k, l]) => ({ n: k, label: l, tipo: 'number', grilla: true })))
+      .concat([{ n: 'no_gravado_exento', label: 'No gravado o exento', tipo: 'number', grilla: true },
+        { n: 'otros_tributos', label: compra ? 'Percepciones y retenciones' : 'Otros tributos', tipo: 'number', grilla: true },
         { n: 'tasa', label: 'Alícuota de IVA', tipo: 'select', opciones: TASAS, valor: '21' }]) : [])
     .concat([
-    { n: 'importe', label: 'Importe total', tipo: 'number', min: 0.01, req: true },
+    { n: 'importe', label: 'Importe total', tipo: 'number', grilla: true },
     { n: 'detalle', label: 'Detalle' },
     { n: 'vencimiento', label: compra ? 'Vence el' : 'Fecha límite de cobro', tipo: 'date', valor: compra ? hoy() : '',
       ayuda: compra ? 'Fecha en que hay que pagarlo. Se usa para los avisos en Inicio.' : 'Vacío: se calcula con el día límite del cliente.' },
@@ -1134,28 +1146,41 @@ function formComprobante(circ, entidadId) {
   function paso1() {
     abrirModal('<h2>Nuevo comprobante de ' + (compra ? 'compra' : 'venta') + '</h2><p class="muted small" style="margin-bottom:12px">' +
       (compra ? 'Solo gastos de Sipymes. El número interno lo asigna el sistema.' : 'Comprobante interno, sin efecto fiscal. El número lo asigna el sistema.') + '</p>' +
-      '<form id="form" class="form">' + campos.map(campoHtml).join('') +
+      '<form id="form" class="form">' + campos.map(c => c.n === 'detalle' ? grillaHtml() + campoHtml(c) : c.grilla ? '' : campoHtml(c)).join('') +
       '<div class="modal-pie"><button type="button" class="btn" data-act="cerrar">Cancelar</button><button type="submit" class="btn btn-primary">' + (compra ? 'Continuar' : 'Emitir') + '</button></div></form>');
     if (datos) campos.forEach(c => { if (datos[c.n] !== undefined && c.n !== 'aplica_a') $('#f-' + c.n).value = datos[c.n]; });
     const tipo = $('#f-tipo'), ent = $('#f-entidad_id'), fec = $('#f-fecha'), ven = $('#f-vencimiento');
-    $('#c-importe').insertAdjacentHTML('afterend', '<div class="campo" id="c-calc"></div>');
+    // Importes al estilo de un sistema de gestión: columna M.O. (lo que se carga) y, si es en dólares, columna en pesos.
     function montos() {
       const v = valores(campos), ri = esRI(), modo = ri ? v.modo : '';
-      const usd = v.moneda === 'USD', porNeto = modo === 'neto';
+      const usd = v.moneda === 'USD', porNeto = modo === 'neto', porTotal = modo === 'total';
+      const tc = usd ? Number(v.tipo_cambio) || 0 : 1, ps = x => r2(r2(x) * tc);
+      const mo = x => usd ? 'US$ ' + r2(x).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : plata(r2(x));
       $('#c-tipo_cambio').classList.toggle('hidden', !usd); $('#f-tipo_cambio').required = usd;
-      NETOS.forEach(([, k]) => $('#c-' + k) && $('#c-' + k).classList.toggle('hidden', !porNeto));
-      ['no_gravado_exento', 'otros_tributos'].forEach(k => $('#c-' + k) && $('#c-' + k).classList.toggle('hidden', !porNeto));
-      if ($('#c-tasa')) $('#c-tasa').classList.toggle('hidden', modo !== 'total');
-      $('#c-importe').classList.toggle('hidden', porNeto); $('#f-importe').required = !porNeto;
-      $('#c-importe label').textContent = modo === 'total' ? 'Total con IVA incluido' : 'Importe total';
-      const c = calcularComp(v), conIva = ri && modo !== 'sin';
-      $('#c-calc').classList.toggle('hidden', !(usd || conIva));
-      // Una fila por dato y una columna por moneda: nada mezclado en un mismo lugar
-      const usdTxt = x => 'US$ ' + Number(x || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      const fila = (t, enUsd, enPesos, fuerte) => '<tr' + (fuerte ? ' class="fuerte"' : '') + '><td class="et">' + t + '</td>' + (usd ? '<td class="num">' + usdTxt(enUsd) + '</td>' : '') + '<td class="num">' + plata(enPesos) + '</td></tr>';
-      $('#c-calc').innerHTML = '<table class="calc"><thead><tr><td></td>' + (usd ? '<th class="num">Dólares</th>' : '') + '<th class="num">Pesos</th></tr></thead><tbody>' +
-        (conIva ? fila('IVA', c.ivaOrig, c.iva) : '') + fila('Total', c.orig, c.total, true) + '</tbody></table>' +
-        (usd ? '<small>Se registra en pesos. Tipo de cambio: ' + (Number(v.tipo_cambio) || 0).toLocaleString('es-AR') + '.</small>' : '');
+      if ($('#c-tasa')) $('#c-tasa').classList.toggle('hidden', !porTotal);
+      const g = $('#c-grilla');
+      g.classList.toggle('con-ars', usd);
+      $('#g-cab-mo').textContent = usd ? 'Dólares (M.O.)' : 'Pesos';
+      NETOS.map(([, k]) => k).concat(['no_gravado_exento', 'otros_tributos']).forEach(k => { const f = $('#g-' + k); if (f) f.classList.toggle('hidden', !porNeto); });
+      $('#g-importe').classList.toggle('hidden', porNeto);
+      $('#f-importe').required = !porNeto; $('#f-importe').min = porNeto ? 0 : 0.01;
+      $('#g-importe label').textContent = porTotal ? 'Total con IVA incluido' : 'Importe total';
+      g.querySelectorAll('[data-p]').forEach(el => { el.textContent = usd ? plata(ps(v[el.dataset.p])) : ''; });
+      // Filas calculadas (no editables)
+      const c = calcularComp(v), filas = [];
+      if (porNeto) {
+        NETOS.forEach(([t, k, l]) => { const n = r2(v[k]); if (n) { const i = r2(n * t / 100); filas.push(['IVA ' + l.replace('Neto gravado ', ''), i, ps(i)]); } });
+        if (!filas.length) filas.push(['IVA', 0, 0]);
+      } else if (porTotal) {
+        const tot = r2(v.importe), n = r2(tot / (1 + Number(v.tasa) / 100));
+        filas.push(['Neto gravado', n, ps(n)], ['IVA ' + String(v.tasa).replace('.', ',') + ' %', r2(tot - n), ps(r2(tot - n))]);
+      }
+      const verTotal = porNeto || porTotal || usd;
+      $('#g-cab').classList.toggle('hidden', !verTotal);
+      $('#g-calc').classList.toggle('hidden', !verTotal);
+      $('#g-calc').innerHTML = filas.map(f => '<div class="g-fila g-ro"><span>' + f[0] + '</span><span class="g-num">' + mo(f[1]) + '</span><span class="g-num g-ars">' + plata(f[2]) + '</span></div>').join('') +
+        '<div class="g-fila g-ro g-total"><span>Total</span><span class="g-num">' + mo(c.orig) + '</span><span class="g-num g-ars">' + plata(c.total) + '</span></div>' +
+        (usd ? '<small class="g-nota">Se registra en pesos, con tipo de cambio ' + (Number(v.tipo_cambio) || 0).toLocaleString('es-AR') + '.</small>' : '');
     }
     $('#form').addEventListener('input', montos); $('#form').addEventListener('change', montos);
     const conTasa = () => { const c = S.conceptos.find(x => x.id === $('#f-concepto_id').value); if (c && c.alicuota !== '' && c.alicuota !== undefined && $('#f-tasa')) $('#f-tasa').value = String(c.alicuota); };

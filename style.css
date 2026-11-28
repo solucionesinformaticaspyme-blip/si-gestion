@@ -240,10 +240,28 @@ body.modo-demo {
   --hover-fila: #FFFAE0;
 }
 
-/* Formulario de comprobantes: IVA y total, una columna por moneda */
-table.calc { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--primary-container); border-radius: 10px; table-layout: auto; }
-table.calc td { padding: 8px 12px; font-size: 14px; text-transform: none; letter-spacing: 0; }
-table.calc td.et { color: var(--ink-detail); font-weight: 600; width: 1%; white-space: nowrap; }
-table.calc td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
-table.calc td.cab { font-size: 12px; font-weight: 600; color: var(--ink-detail); opacity: .75; padding-bottom: 4px; }
-table.calc tr.fuerte td { font-weight: 700; font-size: 15px; border-top: 1px solid var(--border-color); }
+/* Formulario de comprobantes: importes en columnas (M.O. y pesos), IVA y total calculados abajo */
+.grilla { gap: 8px; }
+.g-fila { display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 10px; align-items: center; }
+.grilla.con-ars .g-fila { grid-template-columns: minmax(0, 1fr) 132px 132px; }
+.g-ars { display: none; }
+.grilla.con-ars .g-ars { display: block; }
+.g-fila > label, .g-ro > span:first-child { font-size: 13px; font-weight: 600; color: var(--text-secondary); }
+.g-fila input { height: 40px; text-align: right; font-variant-numeric: tabular-nums; -moz-appearance: textfield; appearance: textfield; }
+.g-fila input::-webkit-outer-spin-button, .g-fila input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.g-num { text-align: right; font-variant-numeric: tabular-nums; font-size: 14px; white-space: nowrap; padding-right: 13px; color: var(--text-primary); }
+.g-cab span { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text-secondary); }
+.g-calc { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border-color); margin-top: 4px; padding-top: 10px; }
+.g-total { border-top: 1px dashed var(--border-color); padding-top: 8px; }
+.g-total span, .g-total > span:first-child { font-weight: 700; font-size: 15px; color: var(--text-primary); }
+.g-nota { color: var(--text-secondary); font-size: 12px; }
+@media (max-width: 480px) {
+  .g-fila { grid-template-columns: minmax(0, 1fr) 118px; gap: 8px; }
+  .g-num { font-size: 13px; padding-right: 8px; }
+  /* En dólares, en el celular: el rótulo arriba y las dos columnas debajo, a lo ancho */
+  .grilla.con-ars .g-fila { grid-template-columns: 1fr 1fr; row-gap: 4px; }
+  .grilla.con-ars .g-fila > label, .grilla.con-ars .g-ro > span:first-child { grid-column: 1 / -1; }
+  .grilla.con-ars .g-cab > span:first-child { display: none; }
+  .grilla.con-ars .g-total > span:first-child { margin-bottom: 2px; }
+}
+
