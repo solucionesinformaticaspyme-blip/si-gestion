@@ -12,19 +12,21 @@ function leerPerfiles() {
   let l = [];
   try { l = JSON.parse(leerLS(LS_PERFILES) || '[]'); } catch (e) { l = []; }
   if (!l.length && leerLS(LS_URL)) l = [{ nombre: 'Mi versión', url: leerLS(LS_URL), clave: leerLS(LS_CLAVE), activo: true }];   // dispositivos de antes
+  // Ya no se guardan claves: la clave vieja queda solo hasta crear el usuario principal de esa versión.
   if (l.length && !l.some(p => p.activo)) l[0].activo = true;
   return l;
 }
 function guardarPerfiles(l) {
   guardarLS(LS_PERFILES, JSON.stringify(l));
   const a = l.find(p => p.activo);
-  guardarLS(LS_URL, a ? a.url : ''); guardarLS(LS_CLAVE, a ? a.clave : '');
+  guardarLS(LS_URL, a ? a.url : ''); guardarLS(LS_CLAVE, '');
 }
 const PERFILES = leerPerfiles();
 const ACTIVO = PERFILES.find(p => p.activo) || {};
 
 const S = {
-  url: ACTIVO.url || '', clave: ACTIVO.clave || '', vista: 'inicio', param: null, modo: 'COMPLETO',
+  url: ACTIVO.url || '', token: ACTIVO.token || '', usuario: ACTIVO.usuario || null, cierre: ACTIVO.cierre || { activo: false, minutos: 60 },
+  vista: 'inicio', param: null, modo: 'COMPLETO',
   clientes: [], proveedores: [], conceptos: [], cuentas: [], config: {}, numeradores: [],
   fComp: { VENTA: { mes: mesActual(), entidad_id: '', anulados: false }, COMPRA: { mes: mesActual(), entidad_id: '', anulados: false } },
   fTes: { mes: mesActual(), cuenta_id: '', anulados: false },
@@ -88,6 +90,7 @@ function cargando(on) { nCarga = Math.max(0, nCarga + (on ? 1 : -1)); $('#cargan
 
 let tToast = null;
 function toast(msg, tipo) {
+  if (msg === 'Se cambió de versión.') return;
   const t = $('#toast');
   t.textContent = msg; t.className = 'toast ' + (tipo || '');
   clearTimeout(tToast); tToast = setTimeout(() => t.classList.add('hidden'), tipo === 'error' ? 5500 : 3000);
@@ -103,44 +106,53 @@ const LECTURAS = new Set(['inicio', 'clientes.listar', 'abonos.listar', 'ventas.
   'cobrar.estadoCuenta', 'proveedores.listar', 'compras.listar', 'pagar.saldos', 'pagar.pendientes', 'pagar.pagos', 'pagar.estadoCuenta',
   'tesoreria.saldos', 'tesoreria.movimientos', 'tesoreria.paraRetirar', 'informes.rentabilidad', 'informes.conceptos', 'informes.saldos',
   'informes.retiros', 'config.leer', 'gastos.estado', 'respaldo.estado', 'maestra.estado', 'maestra.apps']);
-const SIN_CAMBIOS = new Set(['clave.estado', 'cobrar.estadoCuentaPdf', 'pagar.estadoCuentaPdf', 'informes.pdf', 'lote']);   // consultas que no se guardan
+const SIN_CAMBIOS = new Set(['clave.estado', 'usuarios.yo', 'acceso.salir', 'acceso.estado', 'acceso.entrar', 'acceso.recuperar', 'acceso.restablecer', 'acceso.crearPrincipal', 'cobrar.estadoCuentaPdf', 'pagar.estadoCuentaPdf', 'informes.pdf', 'lote']);   // consultas que no se guardan
 const NO_PRECARGAR = new Set(['gastos.estado']);   // consulta la app de gastos: solo cuando se abre Configuración
-const LS_CACHE = 'sg_cache', FRESCO_MS = 20000, MAX_GUARDADOS = 80;
+const LS_CACHE = 'sg_cache2', FRESCO_MS = 20000, MAX_GUARDADOS = 80;   // "2": descarta lo guardado por versiones anteriores de la app
 const CACHE = {}, EN_CURSO = {};
+let cacheUrl = '', tCache = null;   // a qué versión pertenece lo que hay en CACHE
 cambiarCache(ACTIVO.url);
 
 /** Cada versión guarda lo suyo aparte: al cambiar de versión nunca se mezclan los datos. */
 function claveCache(url) { let h = 0; for (const ch of String(url || '')) h = (h * 31 + ch.charCodeAt(0)) | 0; return LS_CACHE + '_' + (h >>> 0).toString(36); }
 function cambiarCache(url) {
+  if (tCache) { clearTimeout(tCache); tCache = null; escribirCache(); }   // termina de guardar lo de la versión anterior, en su lugar
   Object.keys(CACHE).forEach(k => delete CACHE[k]);
+  cacheUrl = url || '';
   try {
-    localStorage.removeItem(LS_CACHE);   // formato anterior, de una sola versión
+    Object.keys(localStorage).filter(k => k === 'sg_cache' || k.indexOf('sg_cache_') === 0).forEach(k => localStorage.removeItem(k));   // formatos anteriores
     const o = JSON.parse(localStorage.getItem(claveCache(url)) || '{}');
     if (o.u === url && o.e) Object.assign(CACHE, o.e);
   } catch (e) { /* sin almacenamiento */ }
 }
-let tCache = null;
+function escribirCache() {
+  if (!cacheUrl) return;
+  const ks = Object.keys(CACHE).sort((a, b) => CACHE[b].t - CACHE[a].t);
+  ks.slice(MAX_GUARDADOS).forEach(k => delete CACHE[k]);
+  try { localStorage.setItem(claveCache(cacheUrl), JSON.stringify({ u: cacheUrl, e: CACHE })); } catch (e) { try { localStorage.removeItem(claveCache(cacheUrl)); } catch (x) { /* sin almacenamiento */ } }
+}
 function guardarCache() {
   clearTimeout(tCache);
-  tCache = setTimeout(() => {
-    const ks = Object.keys(CACHE).sort((a, b) => CACHE[b].t - CACHE[a].t);
-    ks.slice(MAX_GUARDADOS).forEach(k => delete CACHE[k]);
-    try { localStorage.setItem(claveCache(S.url), JSON.stringify({ u: S.url, e: CACHE })); } catch (e) { try { localStorage.removeItem(claveCache(S.url)); } catch (x) { /* sin almacenamiento */ } }
-  }, 400);
+  tCache = setTimeout(() => { tCache = null; escribirCache(); }, 400);
 }
-function vaciarCache() { Object.keys(CACHE).forEach(k => delete CACHE[k]); try { localStorage.removeItem(claveCache(S.url)); } catch (e) { /* sin almacenamiento */ } }
+function vaciarCache() { clearTimeout(tCache); tCache = null; Object.keys(CACHE).forEach(k => delete CACHE[k]); try { localStorage.removeItem(claveCache(cacheUrl)); } catch (e) { /* sin almacenamiento */ } }
+
+/** Una respuesta que llega después de cambiar de versión se descarta: nunca se mezcla con la versión nueva. */
+function cancelada() { const e = new Error('Se cambió de versión.'); e.cancelado = true; return e; }
 function copia(d) { return d === undefined ? d : JSON.parse(JSON.stringify(d)); }
 function clave(accion, datos) { return accion + '|' + JSON.stringify(datos || {}); }
 
 /** Pide al servidor una consulta (si ya está en camino, espera esa misma) y la guarda. Devuelve si cambió. */
 function pedir(k, accion, datos, opt) {
-  if (EN_CURSO[k]) return EN_CURSO[k];
-  return (EN_CURSO[k] = apiRed(accion, datos, opt).then(d => {
+  const url = S.url, ke = url + '|' + k;   // lo que está en camino también se separa por versión
+  if (EN_CURSO[ke]) return EN_CURSO[ke];
+  return (EN_CURSO[ke] = apiRed(accion, datos, opt).then(d => {
+    if (S.url !== url || cacheUrl !== url) throw cancelada();
     const antes = CACHE[k] ? JSON.stringify(CACHE[k].d) : null;
     CACHE[k] = { t: Date.now(), d: d, a: accion, x: datos || {} };
     guardarCache();
     return { d: d, cambio: antes !== JSON.stringify(d) };
-  }).finally(() => { delete EN_CURSO[k]; }));
+  }).finally(() => { delete EN_CURSO[ke]; }));
 }
 
 /** Repinta la pantalla actual con lo guardado (sin volver al principio), si el usuario no está escribiendo. */
@@ -154,13 +166,22 @@ function repintar() {
   }, 150);
 }
 
+const SESION_CAIDA = /Sesión vencida|Actualizá la app|no se creó el usuario principal/;
 async function api(accion, datos, opt) {
   opt = opt || {};
-  if (!LECTURAS.has(accion) || opt.url || opt.clave !== undefined) {
+  try { return await api2(accion, datos, opt); } catch (e) {
+    if (!opt.publico && SESION_CAIDA.test(e.message)) sesionCerrada(e.message);
+    throw e;
+  }
+}
+async function api2(accion, datos, opt) {
+  const url = S.url;
+  if (!LECTURAS.has(accion) || opt.url || opt.publico) {
     const escribe = !LECTURAS.has(accion) && !SIN_CAMBIOS.has(accion);
     try {
       const r = await apiRed(accion, datos, opt);
       if (escribe) despuesDeCambiar();
+      if (!escribe && !opt.url && !opt.publico && S.url !== url) throw cancelada();
       return r;
     } catch (e) {
       if (escribe) despuesDeCambiar();   // aunque no llegue la respuesta, el servidor pudo haberlo hecho: no mostrar datos viejos
@@ -171,11 +192,13 @@ async function api(accion, datos, opt) {
   if (c && !opt.red && !S.forzar) {
     if (c.sucio || Date.now() - c.t > FRESCO_MS) {
       const vista = S.vista, param = S.param;
-      pedir(k, accion, datos, { silencioso: true }).then(r => { if (r.cambio && S.vista === vista && S.param === param) repintar(); }).catch(() => { /* se ve lo guardado */ });
+      pedir(k, accion, datos, { silencioso: true }).then(r => { if (r.cambio && S.url === url && S.vista === vista && S.param === param) repintar(); }).catch(() => { /* se ve lo guardado */ });
     }
     return copia(c.d);
   }
-  return copia((await pedir(k, accion, datos, opt)).d);
+  const r = await pedir(k, accion, datos, opt);
+  if (S.url !== url) throw cancelada();
+  return copia(r.d);
 }
 
 /** Después de registrar o anular algo: todo lo guardado queda viejo y la pantalla siguiente espera datos frescos. */
@@ -192,13 +215,15 @@ async function precargar() {
     .sort((a, b) => CACHE[b].t - CACHE[a].t).slice(0, 40);
   if (!ks.length) return;
   precargando = true;
+  const url = S.url, pedidos = ks.map(k => ({ accion: CACHE[k].a, datos: CACHE[k].x }));
   try {
-    const r = await apiRed('lote', { pedidos: ks.map(k => ({ accion: CACHE[k].a, datos: CACHE[k].x })) }, { silencioso: true });
+    const r = await apiRed('lote', { pedidos: pedidos }, { silencioso: true });
+    if (S.url !== url || cacheUrl !== url) return;   // se cambió de versión mientras tanto: se descarta
     let cambio = false;
     ks.forEach((k, i) => {
       if (!r[i] || !r[i].ok) return;
-      if (JSON.stringify(CACHE[k].d) !== JSON.stringify(r[i].datos)) cambio = true;
-      CACHE[k] = { t: Date.now(), d: r[i].datos, a: CACHE[k].a, x: CACHE[k].x };
+      if (!CACHE[k] || JSON.stringify(CACHE[k].d) !== JSON.stringify(r[i].datos)) cambio = true;
+      CACHE[k] = { t: Date.now(), d: r[i].datos, a: pedidos[i].accion, x: pedidos[i].datos };
     });
     guardarCache();
     if (cambio) repintar();
@@ -213,7 +238,7 @@ async function apiRed(accion, datos, opt) {
   try {
     const r = await fetch(opt.url || S.url, {
       method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },   // text/plain evita el preflight con Apps Script
-      body: JSON.stringify({ clave: opt.clave !== undefined ? opt.clave : S.clave, accion: accion, datos: datos || {} }),
+      body: JSON.stringify(Object.assign({ accion: accion, datos: datos || {} }, opt.publico ? {} : { token: S.token })),
       signal: ctl.signal
     });
     const j = await r.json();
@@ -328,10 +353,37 @@ const TITULOS = {
 };
 const PADRE = { cliente: 'clientes', cuenta: 'cobrar', proveedor: 'compras', pcuenta: 'pagar' };
 
+// ------------------------------------------------------------ Usuarios y permisos
+function puede(p) { return !S.usuario || S.usuario.rol === 'PRINCIPAL' || (S.usuario.permisos || []).indexOf(p) >= 0; }
+function esPrincipal() { return !S.usuario || S.usuario.rol === 'PRINCIPAL'; }
+const NAV_PERMISO = { cobrar: ['ventas', 'informes'], pagar: ['compras', 'informes'], tesoreria: ['tesoreria', 'informes'], informes: ['informes'] };
+function navVisible(v) { return !NAV_PERMISO[v] || NAV_PERMISO[v].some(puede); }
+
+/** Saca de la pantalla los botones que este usuario no puede usar (el servidor igual los rechaza). */
+function permisoBoton(act, c) {
+  const porCirc = c === 'COMPRA' ? 'compras' : 'ventas';
+  if (/Anular$/.test(act)) return ['anular'];
+  if (['compNuevo', 'cancNueva', 'entNuevo', 'entEditar', 'credAplicar', 'compNro'].indexOf(act) >= 0) return [porCirc];
+  if (['aboNuevo', 'venAbonos'].indexOf(act) >= 0) return ['ventas'];
+  if (['movNuevo', 'trfNueva', 'retNuevo'].indexOf(act) >= 0) return ['tesoreria'];
+  if (['infExcel', 'infPdf'].indexOf(act) >= 0) return ['informes'];
+  if (['cuenta', 'pdf', 'estado'].indexOf(act) >= 0) return [porCirc, 'informes'];
+  if (['maestraSync', 'respaldoHacer', 'gastosReintentar'].indexOf(act) >= 0) return ['config'];
+  return null;
+}
+function filtrarPermisos(raiz) {
+  if (esPrincipal() || !raiz) return;
+  raiz.querySelectorAll('[data-act]').forEach(el => {
+    const need = permisoBoton(el.dataset.act, el.dataset.c);
+    if (!need || need.some(puede)) return;
+    if (el.classList.contains('link')) el.replaceWith(document.createTextNode(el.textContent)); else el.remove();
+  });
+}
+
 function pintarNav() {
   const btn = (n, corto) => '<button class="nav-btn" data-act="nav" data-v="' + n[0] + '">' + ico(n[1]) + '<span class="t">' + (corto ? n[3] : n[2]) + '</span></button>';
-  $('#nav-side').innerHTML = NAV.map(n => btn(n)).join('');
-  $('#nav-bottom').innerHTML = NAV.filter(n => NAV_CEL.indexOf(n[0]) >= 0).map(n => btn(n, true)).join('') +
+  $('#nav-side').innerHTML = NAV.filter(n => navVisible(n[0])).map(n => btn(n)).join('');
+  $('#nav-bottom').innerHTML = NAV.filter(n => NAV_CEL.indexOf(n[0]) >= 0 && navVisible(n[0])).map(n => btn(n, true)).join('') +
     '<button class="nav-btn" data-act="mas" data-v="mas">' + ico('menu') + '<span class="t">Más</span></button>';
 }
 
@@ -344,9 +396,12 @@ async function ir(vista, param, suave) {
   const y = window.scrollY;
   try {
     await cargarMaestros();   // clientes, proveedores y configuración: al instante desde lo guardado
+    if (!navVisible(PADRE[vista] || vista)) { vista = S.vista = 'inicio'; $('#titulo').textContent = TITULOS.inicio; }
     await VISTAS[vista](S.param);
+    filtrarPermisos($('#main')); filtrarPermisos($('#acciones'));
     S.forzar = false;
   } catch (e) {
+    if (e.cancelado) return;   // se cambió de versión mientras cargaba: la pantalla nueva ya se está dibujando
     if (/Clave incorrecta|no se definió la clave/.test(e.message)) { toast(e.message, 'error'); return mostrarSetup(); }
     $('#main').innerHTML = '<div class="card"><p class="vacio">' + esc(e.message) + '</p><p style="text-align:center">' + boton('recargar', 'Reintentar', 'refresh') + '</p></div>';
   }
@@ -362,6 +417,8 @@ async function cargarMaestros() {
   S.modo = r[0].modo || 'COMPLETO'; S.version = r[0].version || '';
   $('#empresa').textContent = (S.config.empresa || 'Si-Gestión') + (PERFILES.length > 1 ? ' ▾' : '');
   document.body.classList.toggle('modo-demo', S.modo === 'DEMO');
+  const tc = document.querySelector('meta[name=theme-color]');
+  if (tc) tc.setAttribute('content', S.modo === 'DEMO' ? '#F3F2FA' : '#FAF7F0');
   const b = $('#banda-demo');
   if (b) b.classList.toggle('hidden', S.modo !== 'DEMO');
   const a = PERFILES.find(p => p.activo);
@@ -372,11 +429,15 @@ async function cargarMaestros() {
 async function usarPerfil(i) {
   PERFILES.forEach((p, j) => { p.activo = j === i; });
   guardarPerfiles(PERFILES);
-  S.url = PERFILES[i].url; S.clave = PERFILES[i].clave;
+  const p = PERFILES[i];
+  S.url = p.url; S.token = p.token || ''; S.usuario = p.usuario || null; S.cierre = p.cierre || { activo: false, minutos: 60 };
   cambiarCache(S.url);
   cerrarModal();
-  try { await cargarMaestros(); } catch (e) { toast(e.message, 'error'); if (/Clave incorrecta/.test(e.message)) return pasoClave(); }
+  if (!S.token || vencidaPorInactividad()) return mostrarAcceso(S.token ? 'Se cerró la sesión por inactividad.' : '');
+  try { await cargarMaestros(); } catch (e) { toast(e.message, 'error'); if (SESION_CAIDA.test(e.message)) return; }
+  pintarNav();
   await ir('inicio');
+  refrescarUsuario();
   setTimeout(precargar, 500);
 }
 
@@ -395,7 +456,7 @@ const VISTAS = {};
 VISTAS.inicio = async function () {
   const d = await api('inicio');
   const h = hoy();
-  $('#main').innerHTML =
+  $('#main').innerHTML = (d.sin_saldos ? '' :
     '<div class="kpi-grid">' +
     kpi('account_balance_wallet', 'Tesorería', plata(d.total_tesoreria)) +
     kpi('request_quote', 'A cobrar', plata(d.a_cobrar), d.avisos.length ? 'warn' : '') +
@@ -406,7 +467,7 @@ VISTAS.inicio = async function () {
     kpi('payments', 'Cobrado en el mes', plata(d.cobrado_mes)) +
     kpi('outbox', 'Pagado en el mes', plata(d.pagado_mes)) +
     (d.sin_retirar === undefined || (d.modo && d.modo !== 'COMPLETO') ? '' : kpi('savings', 'Sin retirar (acumulado)', plata(d.sin_retirar))) +
-    '</div><div class="dos">' +
+    '</div>') + '<div class="dos">' +
     '<section class="card"><h2>Clientes sin cobro pasada la fecha límite <span class="chip ' + (d.avisos.length ? 'rojo' : 'verde') + '">' + d.avisos.length + '</span></h2>' +
     (d.avisos.length ? tabla([{ t: 'Cliente' }, { t: 'Venció', c: 'hm' }, { t: 'Días', c: 'num' }, { t: 'Pendiente', c: 'num' }, { t: '' }],
       d.avisos.map(a => ({ c: ['<button class="link" data-act="cuenta" data-c="VENTA" data-id="' + a.entidad_id + '">' + esc(a.entidad) + '</button><br><span class="muted small">' + esc(a.id) + '</span>',
@@ -848,7 +909,7 @@ VISTAS.config = async function () {
   await cargarMaestros();
   const g = S.config;
   const tipoChip = c => '<span class="chip ' + (c.tipo === 'GASTO' ? 'naranja' : 'azul') + '">' + (c.tipo === 'GASTO' ? 'Gasto' : 'Ingreso') + '</span>';
-  $('#main').innerHTML = '<div class="dos">' +
+  $('#main').innerHTML = cardsCuenta() + (puede('config') ? '<div class="dos">' +
     '<section class="card"><h2>General</h2><form id="cfg" class="form">' +
     campoHtml({ n: 'empresa', label: 'Nombre de la empresa', valor: g.empresa }) +
     campoHtml({ n: 'dia_limite_default', label: 'Día límite de cobro general', tipo: 'number', step: 1, min: 1, max: 31, valor: g.dia_limite_default, ayuda: 'Se usa para los clientes que no tienen un día propio.' }) +
@@ -870,14 +931,17 @@ VISTAS.config = async function () {
       '<section class="card"><h2>Planilla MAESTRA ' + boton('maestraSync', 'Actualizar ahora', 'sync', '', 'btn-sm') + '</h2><div id="maestra-cfg"><p class="muted small">Consultando…</p></div></section>' : '') +
     (S.modo !== 'DEMO' ? '<section class="card"><h2>Copia de seguridad ' + boton('respaldoHacer', 'Hacer una copia ahora', 'backup', '', 'btn-sm') + '</h2><div id="respaldo-cfg"><p class="muted small">Consultando…</p></div></section>' : '') +
     (S.modo === 'COMPLETO' ? '<section class="card"><h2>App de gastos</h2><div id="gastos-cfg"><p class="muted small">Consultando tu app de gastos…</p></div></section>' : '') +
+'' : '') +
     '<section class="card"><h2>Versiones en este dispositivo ' + boton('perfilAgregar', 'Conectar otra versión', 'add', '', 'btn-sm') + '</h2>' +
     tabla([{ t: 'Versión' }, { t: '' }], PERFILES.map((p, i) => ({ c: [esc(p.nombre || 'Versión ' + (i + 1)) + (p.activo ? ' <span class="chip verde">En uso</span>' : ''),
       p.activo ? '' : boton('perfilUsar', 'Usar', 'swap_horiz', ' data-i="' + i + '"', 'btn-sm')] }))) +
-    '<p class="muted small" style="margin-top:10px">Por ejemplo, tu versión y la demo. Cada una tiene su propia dirección y clave, y sus datos no se mezclan. También podés cambiar tocando el nombre arriba a la izquierda.' +
+    '<p class="muted small" style="margin-top:10px">Por ejemplo, tu versión y la demo. Cada una tiene su propia dirección y sus propios usuarios, y sus datos no se mezclan. También podés cambiar tocando el nombre arriba a la izquierda.' +
     (S.version ? ' Versión del sistema: ' + esc(S.version) + '.' : '') + '</p></section>' +
-    '<section class="card"><h2>Acceso y mantenimiento</h2><div class="acciones">' + boton('claveCambiar', 'Cambiar clave', 'key') +
-    boton('reinstalar', 'Revisar instalación', 'build') + boton('desconectar', 'Desconectar este dispositivo', 'logout') + '</div>' +
-    '<p class="muted small" style="margin-top:10px">"Revisar instalación" vuelve a crear las hojas que falten y reprograma la tarea diaria (abonos del día 1 y avisos). No borra datos.</p></section>';
+    '<section class="card"><h2>Mantenimiento</h2><div class="acciones">' + (puede('config') ? boton('reinstalar', 'Revisar instalación', 'build') : '') +
+    boton('desconectar', 'Desconectar este dispositivo', 'phonelink_erase') + '</div>' +
+    (puede('config') ? '<p class="muted small" style="margin-top:10px">"Revisar instalación" vuelve a crear las hojas que falten y reprograma la tarea diaria (abonos del día 1 y avisos). No borra datos.</p>' : '') + '</section>';
+  if (esPrincipal()) api('usuarios.listar', {}, { silencioso: true }).then(pintarUsuarios).catch(() => {});
+  if (!puede('config')) return;
   if (S.modo === 'COMPLETO') {
     api('maestra.apps', {}, { silencioso: true }).then(a => { S.apps = a; }).catch(() => {});
     api('maestra.estado', {}, { silencioso: true }).then(pintarMaestra).catch(() => {});
@@ -902,7 +966,7 @@ function pintarPlantilla(p) {
       '<div class="acciones">' + boton('plantillaCopiar', 'Copiar link', 'link', '', 'btn-sm') + '</div>'
     : '<p class="small">Todavía no preparaste la planilla modelo.</p>') +
     '<p class="muted small" style="margin-top:8px">Arma en tu Drive una planilla vacía con la estructura de la última versión. No lleva ningún dato tuyo ni de la demo. ' +
-    'El cliente abre el link con su cuenta de Google y le queda una copia propia. El servidor dentro de la copia se suma en el bloque 3.</p>';
+    'El cliente abre el link con su cuenta de Google y le queda una copia propia. El servidor dentro de la copia se suma en el bloque 5.</p>';
 }
 
 /** Tarjeta "Planilla MAESTRA" de Configuración. */
@@ -1089,7 +1153,7 @@ function formCancelacion(circ, entidadId) {
   let pend = [];
   abrirForm({ titulo: C.Verbo, campos: campos, textoOk: circ === 'VENTA' ? 'Continuar' : 'Emitir orden de pago', ok: async v => {
     v.imputaciones = pend.map(p => ({ comprobante_id: p.id, importe: Number($('#imp-' + p.id).value) || 0 })).filter(i => i.importe > 0);
-    if (circ === 'VENTA') return cartelRetiro(v);
+    if (circ === 'VENTA' && puede('tesoreria')) return cartelRetiro(v);
     const r = await api(C.nuevaCanc, v);
     toast(C.Canc + ' ' + r.id + ' emitido' + (r.a_cuenta > 0 ? '. Quedan ' + plata(r.a_cuenta) + ' a cuenta.' : '.'), 'ok');
   } });
@@ -1221,7 +1285,7 @@ async function verEstado(circ, id, v) {
 
 const ACT = {
   nav: d => ir(d.v),
-  mas: () => abrirModal('<h2>Menú</h2><div class="menu-mas">' + NAV.map(n => '<button class="nav-btn' + ((PADRE[S.vista] || S.vista) === n[0] ? ' active' : '') +
+  mas: () => abrirModal('<h2>Menú</h2><div class="menu-mas">' + NAV.filter(n => navVisible(n[0])).map(n => '<button class="nav-btn' + ((PADRE[S.vista] || S.vista) === n[0] ? ' active' : '') +
     '" data-act="navMas" data-v="' + n[0] + '">' + ico(n[1]) + '<span>' + n[2] + '</span></button>').join('') + '</div>'),
   navMas: d => { cerrarModal(); ir(d.v); },
   recargar: () => recargar(),
@@ -1366,17 +1430,36 @@ const ACT = {
   conEditar: d => formMaestro('Editar concepto', 'conceptos.guardar', S.conceptos.find(c => c.id === d.id), [['INGRESO', 'Ingreso (ventas)'], ['GASTO', 'Gasto (compras)']]),
   ctaNueva: () => formMaestro('Nueva cuenta', 'cuentas.guardar', null, [['CAJA', 'Caja'], ['BANCO', 'Banco'], ['BILLETERA', 'Billetera']]),
   ctaEditar: d => formMaestro('Editar cuenta', 'cuentas.guardar', S.cuentas.find(c => c.id === d.id), [['CAJA', 'Caja'], ['BANCO', 'Banco'], ['BILLETERA', 'Billetera']]),
-  claveCambiar: () => abrirForm({ titulo: 'Cambiar clave', despues: false, campos: [
-    { n: 'nueva', label: 'Clave nueva', tipo: 'password', req: true, ayuda: 'Mínimo 4 caracteres.' }, { n: 'repetir', label: 'Repetir clave nueva', tipo: 'password', req: true }],
+  miClave: () => abrirForm({ titulo: 'Cambiar mi contraseña', despues: false, campos: [
+    { n: 'actual', label: 'Contraseña actual', tipo: 'password', req: true },
+    { n: 'nueva', label: 'Contraseña nueva', tipo: 'password', req: true, ayuda: 'Mínimo 6 caracteres.' }, { n: 'repetir', label: 'Repetir contraseña nueva', tipo: 'password', req: true }],
   ok: async v => {
-    if (v.nueva !== v.repetir) throw new Error('Las claves no coinciden.');
-    await api('clave.cambiar', { nueva: v.nueva });
-    S.clave = v.nueva; guardarLS(LS_CLAVE, v.nueva);
-    toast('Clave cambiada. En tus otros dispositivos vas a tener que ingresarla de nuevo.', 'ok');
+    if (v.nueva !== v.repetir) throw new Error('Las contraseñas no coinciden.');
+    await api('usuarios.miClave', { actual: v.actual, nueva: v.nueva });
+    toast('Contraseña cambiada. En tus otros dispositivos vas a tener que entrar de nuevo.', 'ok');
   } }),
+  salir: async () => {
+    try { await api('acceso.salir', {}, { silencioso: true }); } catch (e) { /* igual se cierra en este dispositivo */ }
+    sesionCerrada('Cerraste la sesión.');
+  },
+  usrNuevo: () => formUsuario(null),
+  usrEditar: d => formUsuario((S.usuarios || []).find(u => u.id === d.id)),
+  usrBaja: d => {
+    const u = (S.usuarios || []).find(x => x.id === d.id);
+    abrirForm({ titulo: 'Dar de baja a ' + u.nombre, peligro: true, textoOk: 'Dar de baja', despues: false,
+      nota: 'No va a poder entrar más. Lo que registró queda como está, con su mail. Después podés crear otro usuario.',
+      ok: async () => { await api('usuarios.baja', { id: u.id }); toast('Usuario dado de baja.', 'ok'); recargar(); } });
+  },
+  cierreGuardar: async () => {
+    const v = { activo: $('#ci-activo').checked, minutos: Number($('#ci-minutos').value) };
+    S.cierre = await api('sesion.configurar', v);
+    guardarSesionPerfil();
+    marcarActividad(true);
+    toast(S.cierre.activo ? 'Listo: la sesión se cierra sola tras ' + textoMinutos(S.cierre.minutos) + ' sin uso.' : 'Cierre automático desactivado.', 'ok');
+  },
   reinstalar: async () => { await api('config.instalar'); toast('Instalación revisada.', 'ok'); recargar(); },
   perfilUsar: d => usarPerfil(Number(d.i)),
-  perfilAgregar: () => { cerrarModal(); $('#app').classList.add('hidden'); $('#setup').classList.remove('hidden'); S.url = ''; pasoUrl(); },
+  perfilAgregar: () => { cerrarModal(); $('#app').classList.add('hidden'); $('#setup').classList.remove('hidden'); S.url = ''; S.token = ''; S.usuario = null; pasoUrl(); },
   elegirPerfil: () => elegirPerfil(),
   demoReiniciar: () => abrirForm({ titulo: 'Reiniciar los datos de demostración', peligro: true, textoOk: 'Reiniciar',
     nota: 'Se borran todos los datos de esta versión de demostración y se carga de nuevo el negocio inventado, con fechas de los últimos meses. Tarda unos segundos. Solo funciona en la demo.',
@@ -1388,17 +1471,19 @@ const ACT = {
     try { await navigator.clipboard.writeText(t); toast('Link copiado.', 'ok'); } catch (e) { $('#pl-link').select(); toast('Seleccioná el link y copialo.', 'info'); }
   },
   desconectar: () => abrirForm({ titulo: 'Desconectar esta versión de este dispositivo', peligro: true, textoOk: 'Desconectar', despues: false,
-    nota: 'Se borran de este dispositivo la dirección del servidor, la clave y los datos guardados de esta versión. Las otras versiones conectadas siguen. Los datos de la planilla no se tocan.', campos: [],
+    nota: 'Se borran de este dispositivo la dirección del servidor, tu sesión y los datos guardados de esta versión. Las otras versiones conectadas siguen. Los datos de la planilla no se tocan.', campos: [],
     ok: async () => {
+      try { await api('acceso.salir', {}, { silencioso: true }); } catch (e) { /* igual se desconecta */ }
       vaciarCache();
       const i = PERFILES.findIndex(p => p.activo);
       if (i >= 0) PERFILES.splice(i, 1);
       if (PERFILES.length) { PERFILES[0].activo = true; guardarPerfiles(PERFILES); return usarPerfil(0); }
-      guardarPerfiles(PERFILES); S.url = S.clave = ''; mostrarSetup();
+      guardarPerfiles(PERFILES); S.url = S.token = ''; S.usuario = null; mostrarSetup();
     } })
 };
 
 const CHG = {
+  cierreCambio: () => { $('#ci-minutos').disabled = !$('#ci-activo').checked; },
   compFiltro: el => { const c = circDe(el.dataset); S.fComp[c] = { mes: $('#fc-mes').value, entidad_id: $('#fc-ent').value, anulados: $('#fc-anu').checked }; recargar(); },
   tesFiltro: () => { S.fTes = { mes: $('#ft-mes').value, cuenta_id: $('#ft-cta').value, anulados: $('#ft-anu').checked }; recargar(); },
   entInactivos: el => { (circDe(el.dataset) === 'VENTA' ? S.fCli : S.fPro).inactivos = el.checked; recargar(); },
@@ -1438,6 +1523,107 @@ document.addEventListener('touchstart', e => { if (e.target.classList && e.targe
 let tRes = null;
 window.addEventListener('resize', () => { clearTimeout(tRes); tRes = setTimeout(() => { if (S.vista === 'informes' && S.inf.tipo === 'rentabilidad') dibujarGrafico(); }, 150); });
 
+// ------------------------------------------------------------ Mi cuenta, usuarios y cierre automático
+
+const PERMISOS_TXT = [['ventas', 'Registrar ventas y cobros'], ['compras', 'Registrar compras y pagos'], ['tesoreria', 'Movimientos de tesorería y retiros'],
+  ['informes', 'Ver informes y saldos'], ['anular', 'Anular comprobantes'], ['config', 'Entrar a Configuración']];
+const MINUTOS = [[15, '15 minutos'], [30, '30 minutos'], [60, '1 hora'], [120, '2 horas'], [240, '4 horas'], [480, '8 horas'], [720, '12 horas'], [1440, '24 horas']];
+function textoMinutos(m) { const x = MINUTOS.find(o => o[0] === m); return x ? x[1] : m + ' minutos'; }
+
+function cardsCuenta() {
+  const u = S.usuario || {};
+  return '<div class="dos"><section class="card"><h2>Mi cuenta</h2>' +
+    '<p class="small"><b>' + esc(u.nombre || '') + '</b> · ' + esc(u.email || '') + ' <span class="chip ' + (u.rol === 'PRINCIPAL' ? 'verde' : 'azul') + '">' +
+    (u.rol === 'PRINCIPAL' ? 'Usuario principal' : 'Usuario') + '</span></p>' +
+    (u.rol && u.rol !== 'PRINCIPAL' ? '<p class="muted small" style="margin-top:6px">Puede: ' + PERMISOS_TXT.filter(p => puede(p[0])).map(p => p[1].toLowerCase()).join(', ') + '.</p>' : '') +
+    '<div class="acciones" style="margin-top:12px">' + boton('miClave', 'Cambiar mi contraseña', 'key') + boton('salir', 'Cerrar sesión', 'logout') + '</div></section>' +
+    (esPrincipal() ? '<section class="card"><h2>Cierre automático de sesión</h2>' +
+      '<label class="check-linea"><input type="checkbox" id="ci-activo" data-chg="cierreCambio"' + (S.cierre.activo ? ' checked' : '') + '> Cerrar la sesión sola si no se usa la app</label>' +
+      '<div class="campo" style="margin-top:10px"><label for="ci-minutos">Después de</label><select id="ci-minutos"' + (S.cierre.activo ? '' : ' disabled') + '>' +
+      MINUTOS.map(o => '<option value="' + o[0] + '"' + (o[0] === S.cierre.minutos ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select></div>' +
+      '<div class="acciones">' + boton('cierreGuardar', 'Guardar', 'save', '', 'btn-primary btn-sm') + '</div>' +
+      '<p class="muted small" style="margin-top:8px">Vale para todos los usuarios y dispositivos. Conviene activarlo si la computadora la usa más de una persona.</p></section>' : '') +
+    '</div>' +
+    (esPrincipal() ? '<section class="card"><h2>Usuarios <span id="usr-btn"></span></h2><div id="usuarios-cfg"><p class="muted small">Consultando…</p></div></section>' : '');
+}
+
+function pintarUsuarios(r) {
+  S.usuarios = r.usuarios;
+  const el = $('#usuarios-cfg'); if (!el) return;
+  $('#usr-btn').innerHTML = r.usuarios.length < r.max ? boton('usrNuevo', 'Agregar usuario', 'person_add', '', 'btn-sm') : '';
+  el.innerHTML = tabla([{ t: 'Usuario' }, { t: 'Puede', c: 'hm' }, { t: '' }], r.usuarios.map(u => ({ c: [
+    '<b>' + esc(u.nombre) + '</b><br><span class="muted small">' + esc(u.email) + '</span>',
+    u.rol === 'PRINCIPAL' ? '<span class="chip verde">Todo (principal)</span>' : (u.permisos.length ? PERMISOS_TXT.filter(p => u.permisos.indexOf(p[0]) >= 0).map(p => '<span class="chip">' + p[1] + '</span>').join(' ') : '<span class="muted small">Solo ver</span>'),
+    icoBtn('usrEditar', 'edit', 'Editar', ' data-id="' + u.id + '"') + (u.rol === 'PRINCIPAL' ? '' : icoBtn('usrBaja', 'person_remove', 'Dar de baja', ' data-id="' + u.id + '"', 'rojo'))] }))) +
+    '<p class="muted small" style="margin-top:10px">Hasta ' + r.max + ' usuarios: vos (principal) y uno más con los permisos que le marques. Si alguien se olvida la contraseña, se la cambiás desde Editar.</p>';
+}
+
+function formUsuario(u) {
+  const segundo = !u || u.rol !== 'PRINCIPAL';
+  const campos = [
+    { n: 'nombre', label: 'Nombre', valor: u ? u.nombre : '', req: true },
+    { n: 'email', label: 'Mail (es su usuario para entrar)', tipo: 'email', valor: u ? u.email : '', req: true },
+    { n: 'nueva', label: u ? 'Contraseña nueva' : 'Contraseña', tipo: 'password', req: !u, ayuda: u ? 'Dejala vacía para no cambiarla. Si la cambiás, se cierran sus sesiones abiertas.' : 'Mínimo 6 caracteres. Después la puede cambiar desde Mi cuenta.' }
+  ].concat(segundo ? PERMISOS_TXT.map(p => ({ n: 'p_' + p[0], label: p[1], tipo: 'check', valor: u ? u.permisos.indexOf(p[0]) >= 0 : false })) : []);
+  abrirForm({ titulo: u ? 'Editar usuario' : 'Agregar usuario', despues: false, campos: campos,
+    nota: segundo ? 'Marcá lo que puede hacer. Sin ninguna marca, solo puede ver clientes, proveedores y comprobantes.' : '',
+    ok: async v => {
+      const d = { id: u ? u.id : '', nombre: v.nombre, email: v.email, nueva: v.nueva, permisos: PERMISOS_TXT.map(p => p[0]).filter(k => v['p_' + k]) };
+      const r = await api('usuarios.guardar', d);
+      if (S.usuario && r.id === S.usuario.id) { S.usuario = r; guardarSesionPerfil(); }
+      toast('Usuario guardado.', 'ok'); recargar();
+    } });
+}
+
+// --- Sesión: se guarda la llave (nunca la contraseña) y se cierra sola por inactividad si el principal lo activó.
+function perfilActivo() { return PERFILES.find(p => p.activo); }
+function guardarSesionPerfil() {
+  const p = perfilActivo(); if (!p) return;
+  p.token = S.token; p.usuario = S.usuario; p.cierre = S.cierre; if (S.usuario) p.email = S.usuario.email;
+  delete p.clave;
+  guardarPerfiles(PERFILES);
+}
+function claveActividad() { return claveCache(S.url).replace(LS_CACHE, 'sg_act'); }
+let ultActividad = 0;
+function marcarActividad(forzar) {
+  const a = Date.now();
+  if (!forzar && a - ultActividad < 15000) return;
+  ultActividad = a;
+  try { localStorage.setItem(claveActividad(), String(a)); } catch (e) { /* sin almacenamiento */ }
+}
+function vencidaPorInactividad() {
+  if (!S.cierre || !S.cierre.activo) return false;
+  let u = 0; try { u = Number(localStorage.getItem(claveActividad()) || 0); } catch (e) { u = 0; }
+  return u > 0 && Date.now() - u > S.cierre.minutos * 60000;
+}
+['click', 'keydown', 'touchstart'].forEach(ev => document.addEventListener(ev, () => { if (S.token) marcarActividad(); }, { passive: true }));
+setInterval(() => {
+  if (S.token && !$('#app').classList.contains('hidden') && vencidaPorInactividad()) {
+    api('acceso.salir', {}, { silencioso: true }).catch(() => {});
+    sesionCerrada('Se cerró la sesión por inactividad.');
+  }
+}, 30000);
+
+/** Trae del servidor el usuario y el cierre automático vigentes (por si el principal cambió permisos). */
+async function refrescarUsuario() {
+  try {
+    const r = await api('usuarios.yo', {}, { silencioso: true });
+    const cambio = JSON.stringify(r.usuario) !== JSON.stringify(S.usuario);
+    S.usuario = r.usuario; S.cierre = r.cierre; guardarSesionPerfil();
+    if (cambio) { pintarNav(); ir(S.vista, S.param, true); }
+  } catch (e) { /* sin conexión o sesión caída: ya se manejó */ }
+}
+
+let cerrando = false;
+function sesionCerrada(msg) {
+  if (cerrando) return;
+  cerrando = true; setTimeout(() => { cerrando = false; }, 1500);
+  S.token = ''; S.usuario = null;
+  const p = perfilActivo(); if (p) { delete p.token; delete p.usuario; guardarPerfiles(PERFILES); }
+  vaciarCache();
+  mostrarAcceso(msg);
+}
+
 // ------------------------------------------------------------ Conexión inicial
 
 function mostrarSetup() {
@@ -1445,64 +1631,110 @@ function mostrarSetup() {
   pasoUrl();
 }
 
-function pintarSetup(sub, campos, textoOk, ok, volver) {
+function pintarSetup(sub, campos, textoOk, ok, volver, extras) {
   $('#setup-sub').textContent = sub;
   const f = $('#setup-form');
   f.innerHTML = campos.map(campoHtml).join('') + '<button type="submit" class="btn btn-primary btn-block">' + textoOk + '</button>' +
+    (extras || []).map((x, k) => '<button type="button" class="btn btn-block" id="setup-x' + k + '">' + x[0] + '</button>').join('') +
     (volver ? '<button type="button" class="btn btn-block" id="setup-volver">Cambiar dirección del servidor</button>' : '');
   f.onsubmit = async e => { e.preventDefault(); try { await ok(valores(campos)); } catch (err) { toast(err.message, 'error'); } };
+  (extras || []).forEach((x, k) => { $('#setup-x' + k).onclick = x[1]; });
   if (volver) $('#setup-volver').onclick = pasoUrl;
 }
 
 function pasoUrl() {
   pintarSetup('Conectá este dispositivo con tu servidor.', [{ n: 'url', label: 'Dirección del servidor (Apps Script)', tipo: 'url', req: true, valor: S.url,
     ph: 'https://script.google.com/macros/s/.../exec', ayuda: 'Es la URL que termina en /exec, la que copiaste al implementar la aplicación web.' }], 'Continuar', async v => {
-    const e = await api('clave.estado', {}, { url: v.url, clave: '' });
+    const e = await api('acceso.estado', {}, { url: v.url, publico: true });
     S.url = v.url;
     cambiarCache(S.url);
-    if (e.definida) pasoClave(); else pasoDefinir();
+    pasoAcceso(e);
   });
 }
 
-function pasoDefinir() {
-  pintarSetup('Primer ingreso: definí tu clave de acceso.', [
-    { n: 'nueva', label: 'Clave', tipo: 'password', req: true, ayuda: 'Mínimo 4 caracteres. Después la podés cambiar en Configuración.' },
-    { n: 'repetir', label: 'Repetir clave', tipo: 'password', req: true }], 'Definir clave y entrar', async v => {
-    if (v.nueva !== v.repetir) throw new Error('Las claves no coinciden.');
-    await api('clave.definir', { nueva: v.nueva }, { clave: '' });
-    await entrar(v.nueva);
+/** Según el servidor: crear el primer usuario (instalación nueva o paso desde la clave única) o entrar. */
+async function mostrarAcceso(msg) {
+  $('#app').classList.add('hidden'); $('#setup').classList.remove('hidden'); cerrarModal();
+  if (msg) toast(msg, 'info');
+  try { pasoAcceso(await api('acceso.estado', {}, { publico: true })); } catch (e) { toast(e.message, 'error'); pasoUrl(); }
+}
+function pasoAcceso(e) {
+  if (e.usuarios) return pasoEntrar();
+  pasoCrearPrincipal(e.clave_vieja);
+}
+
+function pasoCrearPrincipal(migrar) {
+  const p = PERFILES.find(x => x.url === S.url);
+  pintarSetup(migrar ? 'Ahora se entra con usuario y contraseña. Creá tu usuario principal: tus datos no se tocan.' : 'Primer ingreso: creá el usuario principal.', [
+    { n: 'nombre', label: 'Tu nombre', req: true },
+    { n: 'email', label: 'Tu mail (va a ser tu usuario)', tipo: 'email', req: true, ayuda: 'A este mail te llega el código si algún día te olvidás la contraseña.' },
+    { n: 'nueva', label: 'Contraseña', tipo: 'password', req: true, ayuda: 'Mínimo 6 caracteres.' },
+    { n: 'repetir', label: 'Repetir contraseña', tipo: 'password', req: true }
+  ].concat(migrar ? [{ n: 'clave_actual', label: 'Clave actual (la de siempre)', tipo: 'password', req: true, valor: p && p.clave ? p.clave : '',
+    ayuda: 'Para confirmar que sos vos. Después deja de usarse.' }] : []), 'Crear usuario y entrar', async v => {
+    if (v.nueva !== v.repetir) throw new Error('Las contraseñas no coinciden.');
+    conectado(await api('acceso.crearPrincipal', v, { publico: true }));
   }, true);
 }
 
-function pasoClave() {
-  pintarSetup('Ingresá tu clave de acceso.', [{ n: 'clave', label: 'Clave', tipo: 'password', req: true }], 'Entrar', v => entrar(v.clave), true);
+function pasoEntrar() {
+  const p = PERFILES.find(x => x.url === S.url);
+  pintarSetup('Ingresá con tu usuario.', [
+    { n: 'email', label: 'Mail', tipo: 'email', req: true, valor: p && p.email ? p.email : '' },
+    { n: 'clave', label: 'Contraseña', tipo: 'password', req: true }], 'Entrar', async v => {
+    conectado(await api('acceso.entrar', v, { publico: true }));
+  }, true, [['Me olvidé la contraseña', () => pasoRecuperar($('#f-email').value)]]);
 }
 
-async function entrar(clave) {
-  S.clave = clave;
+function pasoRecuperar(email) {
+  pintarSetup('Si sos el usuario principal, te mandamos un código por mail. Si sos el segundo usuario, pedile al principal que te la cambie.', [
+    { n: 'email', label: 'Mail del usuario principal', tipo: 'email', req: true, valor: email || '' }], 'Mandarme el código', async v => {
+    const r = await api('acceso.recuperar', v, { publico: true });
+    toast(r.mensaje, 'info');
+    pasoCodigo(v.email);
+  }, false, [['Volver', pasoEntrar]]);
+}
+
+function pasoCodigo(email) {
+  pintarSetup('Ingresá el código que te llegó a ' + email + ' y elegí una contraseña nueva.', [
+    { n: 'codigo', label: 'Código de 6 números', req: true },
+    { n: 'nueva', label: 'Contraseña nueva', tipo: 'password', req: true, ayuda: 'Mínimo 6 caracteres.' },
+    { n: 'repetir', label: 'Repetir contraseña nueva', tipo: 'password', req: true }], 'Cambiar y entrar', async v => {
+    if (v.nueva !== v.repetir) throw new Error('Las contraseñas no coinciden.');
+    conectado(await api('acceso.restablecer', { email: email, codigo: v.codigo, nueva: v.nueva }, { publico: true }));
+  }, false, [['Pedir otro código', () => pasoRecuperar(email)], ['Volver', pasoEntrar]]);
+}
+
+async function conectado(r) {
+  S.token = r.token; S.usuario = r.usuario; S.cierre = r.cierre;
+  vaciarCache();
   S.forzar = true;
-  await cargarMaestros();            // valida la clave contra el servidor (sin usar lo guardado)
+  await cargarMaestros();
   S.forzar = false;
   let p = PERFILES.find(x => x.url === S.url);
   if (!p) { p = { nombre: S.config.empresa || 'Versión ' + (PERFILES.length + 1), url: S.url }; PERFILES.push(p); }
-  p.clave = clave; p.nombre = S.config.empresa || p.nombre;
+  p.nombre = S.config.empresa || p.nombre;
   PERFILES.forEach(x => { x.activo = x === p; });
-  guardarPerfiles(PERFILES);
+  guardarSesionPerfil();
+  marcarActividad(true);
   iniciarApp(true);
 }
 
 async function iniciarApp(yaCargado) {
-  $('#setup').classList.add('hidden'); $('#app').classList.remove('hidden');
+  if (vencidaPorInactividad()) return sesionCerrada('Se cerró la sesión por inactividad.');
+  marcarActividad(true);
+  $('#setup').classList.add('hidden'); $('#setup-form').innerHTML = ''; $('#app').classList.remove('hidden');
   pintarNav();
   try {
     if (!yaCargado) await cargarMaestros();
   } catch (e) {
     toast(e.message, 'error');
-    if (/Clave incorrecta|no se definió la clave/.test(e.message)) return mostrarSetup();
+    if (SESION_CAIDA.test(e.message)) return;
   }
   await ir('inicio');
+  if (!yaCargado) refrescarUsuario();
   setTimeout(precargar, 500);        // actualiza en segundo plano todo lo guardado
 }
 
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => { /* sin modo instalable */ });
-if (S.url && S.clave) iniciarApp(false); else mostrarSetup();
+if (S.url && S.token) iniciarApp(false); else if (S.url) mostrarAcceso(); else mostrarSetup();
